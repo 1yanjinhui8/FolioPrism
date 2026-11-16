@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>媒体阅读器</title>
+<link rel="stylesheet" href="/vendor/hljs-github.min.css" id="hljs-light">
+<link rel="stylesheet" href="/vendor/hljs-github-dark.min.css" id="hljs-dark" disabled>
+<link rel="stylesheet" href="/assets/style.css">
+<script defer src="/vendor/purify.min.js"></script>
+<script defer src="/vendor/marked.min.js"></script>
+<script defer src="/vendor/highlight.min.js"></script>
+<script defer src="/vendor/mammoth.browser.min.js"></script>
+<script defer src="/vendor/xlsx.full.min.js"></script>
+<script defer src="/assets/app.js"></script>
+</head>
+<body data-theme="light">
+
+<div id="progress" aria-hidden="true"><i></i></div>
+
+<header id="topbar">
+  <div class="tb-group tb-left">
+    <button id="btn-open-folder" class="btn btn-primary" title="选择要阅读的文件夹（Ctrl+O）" aria-label="打开文件夹">
+      <span class="ico" aria-hidden="true">📂</span> 打开文件夹
+    </button>
+    <div class="path-box">
+      <input id="root-input" type="text" spellcheck="false" aria-label="文件夹路径" placeholder="粘贴文件夹路径，例如 d:\Documents\notes">
+      <button id="btn-go" class="btn">前往</button>
+    </div>
+  </div>
+
+  <div class="tb-group tb-mid">
+    <span id="crumb" class="crumb"></span>
+  </div>
+
+  <div class="tb-group tb-right">
+    <button id="btn-read" class="btn btn-icon" title="朗读全文（Edge 神经语音，可暂停和调语速）" aria-label="朗读全文">🔊 朗读</button>
+    <button id="btn-bilingual" class="btn btn-icon" title="逐句双语对照：原文 + 译文（点击切换 双语 / 仅译文 / 关闭）" aria-label="切换双语对照">双语</button>
+    <button id="btn-translate-settings" class="btn btn-icon" title="翻译设置" aria-label="翻译设置">⚙</button>
+    <button id="btn-font-dec" class="btn btn-icon" title="缩小字号" aria-label="缩小字号">A-</button>
+    <span id="font-label" class="font-label">18</span>
+    <button id="btn-font-inc" class="btn btn-icon" title="放大字号" aria-label="放大字号">A+</button>
+    <button id="btn-width" class="btn btn-icon" title="切换阅读宽度" aria-label="切换阅读宽度">宽度</button>
+    <button id="btn-toc" class="btn btn-icon" title="显示/隐藏目录" aria-label="显示或隐藏目录">目录</button>
+    <button id="btn-theme" class="btn btn-icon" title="切换主题" aria-label="切换主题">主题</button>
+  </div>
+</header>
+
+<div id="find-bar" hidden>
+  <input id="find-input" type="search" spellcheck="false" placeholder="在文档中查找…" aria-label="在文档中查找">
+  <span id="find-count" aria-live="polite">0/0</span>
+  <button id="find-prev" type="button" class="btn btn-mini" title="上一个（Shift+Enter）" aria-label="上一个匹配">↑</button>
+  <button id="find-next" type="button" class="btn btn-mini" title="下一个（Enter）" aria-label="下一个匹配">↓</button>
+  <button id="find-close" type="button" class="btn btn-mini" title="关闭（Esc）" aria-label="关闭查找">×</button>
+</div>
+
+<main id="layout">
+  <aside id="sidebar">
+    <div class="side-head">
+      <span class="side-title">文件</span>
+      <button id="btn-refresh" class="btn btn-mini" title="重新加载当前目录" aria-label="刷新当前目录">刷新</button>
+    </div>
+    <div id="continue" class="continue"></div>
+    <div id="recent" class="recent"></div>
+    <div id="tree" class="tree"><div class="tree-loading">正在读取目录…</div></div>
+  </aside>
+
+  <article id="content">
+    <div class="welcome">
+      <h1>媒体阅读器</h1>
+      <p>正在载入默认文档…</p>
+    </div>
+  </article>
+
+  <aside id="toc-rail">
+    <div class="side-head"><span class="side-title">目录</span></div>
+    <nav id="toc"></nav>
+  </aside>
+</main>
+
+<div id="lightbox" hidden>
+  <div class="lb-backdrop"></div>
+  <div class="lb-stage">
+    <img id="lb-img" alt="">
+  </div>
+  <div class="lb-info"><span id="lb-caption"></span><span id="lb-count"></span></div>
+  <button class="lb-btn lb-prev" title="上一张" aria-label="上一张">‹</button>
+  <button class="lb-btn lb-next" title="下一张" aria-label="下一张">›</button>
+  <button class="lb-btn lb-close" title="关闭 (Esc)" aria-label="关闭图片预览">×</button>
+</div>
+
+<div id="toast"></div>
+
+<div id="word-tip" hidden>
+  <div class="wt-head">
+    <span id="wt-word"></span>
+    <span id="wt-phonetic"></span>
+    <button id="wt-speak" type="button" title="朗读单词">🔊</button>
+    <button id="wt-close" type="button" title="关闭">×</button>
+  </div>
+  <div id="wt-defs" class="wt-defs"></div>
+  <div class="wt-foot" id="wt-foot">悬停 / 选中 2 秒自动查词</div>
+</div>
+
+<div id="tts-bar" hidden>
+  <button id="tts-prev" type="button" class="tts-btn" title="上一句" aria-label="上一句">⏮</button>
+  <button id="tts-play" type="button" class="tts-btn tts-play" title="暂停 / 继续" aria-label="暂停或继续朗读">⏸</button>
+  <button id="tts-next" type="button" class="tts-btn" title="下一句" aria-label="下一句">⏭</button>
+  <div class="tts-info">
+    <span id="tts-caption"></span>
+    <span id="tts-count"></span>
+  </div>
+  <select id="tts-rate" title="朗读速度">
+    <option value="0.7">0.7×</option>
+    <option value="0.85">0.85×</option>
+    <option value="1" selected>1×</option>
+    <option value="1.15">1.15×</option>
+    <option value="1.3">1.3×</option>
+  </select>
+  <button id="tts-stop" type="button" class="tts-btn tts-stop" title="停止朗读" aria-label="停止朗读">×</button>
+</div>
+
+<div id="trans-modal" hidden>
+  <div class="tm-backdrop"></div>
+  <div class="tm-panel" role="dialog" aria-modal="true" aria-labelledby="tm-title">
+    <div class="tm-head">
+      <h3 id="tm-title">翻译设置</h3>
+      <button class="tm-close" title="关闭" aria-label="关闭翻译设置">×</button>
+    </div>
+    <div class="tm-body">
+      <div class="tm-langs">
+        <label class="tm-field">
+          <span>原文语言</span>
+          <select id="tm-src-lang"></select>
+        </label>
+        <label class="tm-field">
+          <span>译文语言</span>
+          <select id="tm-tgt-lang"></select>
+        </label>
+      </div>
+      <p class="tm-hint">论文是哪种语言就选哪种；不确定就保持「自动检测」。译文语言同时决定 PDF 双语版的目标语言。</p>
+
+      <label class="tm-field">
+        <span>翻译服务</span>
+        <select id="tm-service">
+          <option value="bing">Bing 免费翻译（推荐，国内可用，无需 Key）</option>
+          <option value="google">Google 免费翻译（无需 Key，偶尔限流）</option>
+          <option value="openai">OpenAI 兼容接口（DeepSeek / GPT / 本地 Ollama）</option>
+        </select>
+      </label>
+      <p class="tm-hint">阅读正文时，把鼠标停在单词上 2 秒（或选中文字停 2 秒），会自动弹出音标和中文释义。</p>
+
+      <div id="tm-openai" class="tm-openai">
+        <label class="tm-field">
+          <span>Base URL</span>
+          <input id="tm-base" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1">
+        </label>
+        <label class="tm-field">
+          <span>API Key</span>
+          <input id="tm-key" type="password" spellcheck="false" placeholder="sk-…（只保存在本机）">
+        </label>
+        <div class="tm-row">
+          <span class="tm-hint" id="tm-key-state">Key 不会通过接口返回，只在本机保存。</span>
+          <button id="tm-key-clear" class="btn btn-mini" type="button" disabled>清除已保存的 Key</button>
+        </div>
+        <label class="tm-field">
+          <span>模型</span>
+          <input id="tm-model" type="text" spellcheck="false" placeholder="deepseek-chat">
+        </label>
+        <p class="tm-hint">DeepSeek：Base URL 填 <code>https://api.deepseek.com/v1</code>，模型填 <code>deepseek-chat</code>。译文质量比免费接口好，PDF 和正文都能用。</p>
+      </div>
+
+      <div class="tm-tts">
+        <label class="tm-field">
+          <span>英文发音</span>
+          <select id="tm-voice-en">
+            <option value="en-US-AriaNeural">Aria（女声，清晰）</option>
+            <option value="en-US-JennyNeural">Jenny（女声，亲切）</option>
+            <option value="en-US-GuyNeural">Guy（男声）</option>
+            <option value="en-US-AndrewNeural">Andrew（男声，自然）</option>
+            <option value="en-GB-SoniaNeural">Sonia（英式女声）</option>
+            <option value="en-GB-RyanNeural">Ryan（英式男声）</option>
+          </select>
+        </label>
+        <label class="tm-field">
+          <span>中文发音</span>
+          <select id="tm-voice-zh">
+            <option value="zh-CN-XiaoxiaoNeural">晓晓（女声）</option>
+            <option value="zh-CN-YunxiNeural">云希（男声）</option>
+            <option value="zh-CN-YunyangNeural">云扬（男声，新闻）</option>
+          </select>
+        </label>
+        <p class="tm-hint">语音由 Edge 神经语音合成，需要联网；日文、韩文、法文、德文等其他语言会自动使用对应的母语音色。播放栏里可以调 0.7×–1.3× 语速。</p>
+      </div>
+
+      <div class="tm-engine">
+        <div class="tm-row">
+          <strong>PDF 双语引擎</strong>
+          <span id="tm-engine-status" class="tm-status">检测中…</span>
+        </div>
+        <div class="tm-row">
+          <strong>语音朗读引擎</strong>
+          <span id="tm-tts-status" class="tm-status">检测中…</span>
+        </div>
+        <p class="tm-hint">PDF 翻译基于开源项目 <b>PDFMathTranslate（pdf2zh）</b>：保留公式、图表、表格和分栏，生成「原文 + 译文」对照 PDF。安装按钮会同时装好 PDF 翻译和语音合成引擎，约 1–3 分钟。</p>
+        <div class="tm-row">
+          <button id="tm-install" class="btn">安装 / 修复引擎</button>
+          <span class="tm-hint" id="tm-engine-path"></span>
+        </div>
+        <pre id="tm-log" class="tm-log" hidden></pre>
+      </div>
+    </div>
+    <div class="tm-foot">
+      <span class="tm-hint">配置保存在 <code id="tm-datadir">…</code></span>
+      <button id="tm-save" class="btn btn-primary">保存设置</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
