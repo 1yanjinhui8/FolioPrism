@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 媒体阅读器 —— Electron 主进程
+ * FolioPrism（棱阅）—— Electron 主进程
  *
  * 职责：
  *   1. 在本机起一个 node:http 服务（server.js），窗口指向 http://127.0.0.1:<port>
@@ -15,7 +15,10 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 
 const server = require('./server');
 
-const APP_NAME = '媒体阅读器';
+// 产品名用英文，进程名 / exe 名 / 安装目录都用它；界面上再带中文名「棱阅」
+const APP_NAME = 'FolioPrism';
+const APP_TITLE = 'FolioPrism 棱阅';
+const LEGACY_APP_NAME = '媒体阅读器';
 const ICON_PATH = path.join(__dirname, 'build', 'icon.ico');
 const START_PORT = 7788;
 
@@ -25,7 +28,7 @@ let baseUrl = '';
 /**
  * 命令行里带的文件路径。
  *
- * Windows 的「双击打开」「打开方式 → 媒体阅读器」都是把文件路径作为
+ * Windows 的「双击打开」「打开方式 → FolioPrism」都是把文件路径作为
  * argv 传给 exe 的。以前这里完全不看 argv，所以双击 docx 只会把已经
  * 开着的窗口拉到前台、或者恢复上次读的文件，新文件永远打不开。
  */
@@ -200,14 +203,14 @@ function buildMenu() {
       label: '帮助',
       submenu: [
         {
-          label: '关于 ' + APP_NAME,
+          label: '关于 ' + APP_TITLE,
           click: () => {
             const opts = {
               type: 'info',
-              title: '关于 ' + APP_NAME,
-              message: APP_NAME + ' ' + app.getVersion(),
+              title: '关于 ' + APP_TITLE,
+              message: APP_TITLE + ' ' + app.getVersion(),
               detail:
-                '本地多媒体阅读器：Markdown / 代码 / PDF / Office 渲染，图片与视频真实显示。\n\n' +
+                '本地优先的多媒体文档与双语阅读工作台：Markdown / 代码 / PDF / Office 渲染，图片与视频真实显示。\n\n' +
                 'Electron ' + process.versions.electron + ' · Node ' + process.versions.node,
               buttons: ['好'],
             };
@@ -230,7 +233,7 @@ function createWindow() {
     height: 920,
     minWidth: 1040,
     minHeight: 640,
-    title: APP_NAME,
+    title: APP_TITLE,
     icon: ICON_PATH,
     backgroundColor: '#f6f7f9',
     show: false,
@@ -257,7 +260,7 @@ function createWindow() {
     if (!isMainFrame || code === -3 /* ERR_ABORTED */) return;
     const opts = {
       type: 'error',
-      title: APP_NAME,
+      title: APP_TITLE,
       message: '页面加载失败',
       detail: (desc || '未知错误') + '（' + code + '）\n' + url,
       buttons: ['重试', '退出'],
@@ -303,6 +306,7 @@ function createWindow() {
 /* ------------------------------------------------------------------ */
 
 async function bootstrap() {
+  migrateUserData();
   Menu.setApplicationMenu(buildMenu());
   registerIpc();
 
@@ -310,7 +314,7 @@ async function bootstrap() {
   try {
     port = await server.start({ port: START_PORT, openBrowser: false });
   } catch (e) {
-    dialog.showErrorBox(APP_NAME, '本地服务启动失败：\n' + ((e && e.message) || e));
+    dialog.showErrorBox(APP_TITLE, '本地服务启动失败：\n' + ((e && e.message) || e));
     app.quit();
     return;
   }
@@ -324,7 +328,27 @@ async function bootstrap() {
 }
 
 app.setName(APP_NAME);
-if (process.platform === 'win32') app.setAppUserModelId('com.mediareader.app');
+if (process.platform === 'win32') app.setAppUserModelId('com.folioprism.app');
+
+/**
+ * 改名后的数据目录迁移。
+ *
+ * Electron 的 userData（含 localStorage 里的阅读进度、主题、最近文件）
+ * 目录名跟随 app.setName。直接改名会让老用户「阅读记录全没了」，
+ * 所以首次以新名字启动时，把旧的整个目录复制过来；旧目录保持不动，
+ * 万一要回退旧版本还能用。
+ */
+function migrateUserData() {
+  try {
+    const newDir = app.getPath('userData');
+    const oldDir = path.join(app.getPath('appData'), LEGACY_APP_NAME);
+    if (!fs.existsSync(newDir) && fs.existsSync(oldDir)) {
+      fs.cpSync(oldDir, newDir, { recursive: true });
+    }
+  } catch (_) {
+    /* 迁移失败不阻塞启动：大不了用户重新选一次文件夹 */
+  }
+}
 
 // 退出时结束所有子进程（pdf2zh / Edge TTS / 引擎安装），否则它们会变成孤儿进程
 // 继续在后台跑。只做一次，避免 before-quit 被多次触发。

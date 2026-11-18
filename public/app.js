@@ -1,5 +1,5 @@
 /* ==========================================================================
-   媒体阅读器 —— 前端逻辑
+   FolioPrism（棱阅）—— 前端逻辑
    职责：把 Markdown 当文章渲染，图片与视频真实显示出来。
    ========================================================================== */
 
@@ -3848,7 +3848,7 @@
       crumb.innerHTML = '';
       crumb.title = '';
     }
-    $('#content').innerHTML = '<div class="welcome"><h1>媒体阅读器</h1>' +
+    $('#content').innerHTML = '<div class="welcome"><h1>FolioPrism <span class="brand-zh">棱阅</span></h1>' +
       '<p class="muted">请在左侧选择一个文件开始阅读，或用「文件 → 打开文件…」（Ctrl+Shift+O）打开任意文档。</p></div>';
     window.__reader.ready = true;
     updateStats();

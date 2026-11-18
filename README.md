@@ -1,6 +1,6 @@
 <div align="center">
 
-# FolioPrism (媒体阅读器)
+# FolioPrism（棱阅）
 
 **A local-first multimedia document reader & bilingual reading studio.**  
 **本地优先的多媒体文档阅读与双语伴读工作台。**
@@ -21,7 +21,7 @@
 
 ## English
 
-**FolioPrism** (repository: `media-reader`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at browsing local folders containing Markdown notes, academic PDFs, Office files, source code, and media side-by-side—especially for bilingual reading of English research papers and technical documentation.
+**FolioPrism** (棱阅 · repository: `media-reader`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at browsing local folders containing Markdown notes, academic PDFs, Office files, source code, and media side-by-side—especially for bilingual reading of English research papers and technical documentation.
 
 ### Key Features
 
@@ -87,7 +87,9 @@ node server.js --port=8080 --root="D:\Documents" --no-open
 npm run dist
 ```
 
-Outputs a standalone portable folder at `dist/媒体阅读器-win32-x64/`. Copy the folder to any Windows x64 machine and launch `媒体阅读器.exe`—no Node.js installation required on the target machine. (Internet access is needed during packaging to fetch Electron binaries.)
+Outputs a standalone portable folder at `dist/FolioPrism-win32-x64/`. Copy the folder to any Windows x64 machine and launch `FolioPrism.exe`—no Node.js installation required on the target machine. (Internet access is needed during packaging to fetch Electron binaries.)
+
+> **Offline packaging**: put the matching `electron-v<version>-win32-x64.zip` in a folder and set `ELECTRON_ZIP_DIR` to it before running `npm run dist`.
 
 ### Verification Script
 
@@ -127,12 +129,14 @@ build/              Application icon (icon.ico)
 ### Configuration, Cache & Logs
 
 All runtime data is stored in the user's local AppData directory (keeping the app directory read-only safe):
-- `%LOCALAPPDATA%\media-reader\config.json` — Translation backend, languages, OpenAI settings, TTS voices/rate
-- `%LOCALAPPDATA%\media-reader\text-cache.json` — Text & dictionary lookup cache (capped at 4,000 entries)
-- `%LOCALAPPDATA%\media-reader\cache\pdf\` — Translated PDF outputs (auto-pruned after 90 days / 2 GB)
-- `%LOCALAPPDATA%\media-reader\cache\tts\` — Synthesized MP3 cache (auto-pruned after 30 days / 500 MB)
+- `%LOCALAPPDATA%\folioprism\config.json` — Translation backend, languages, OpenAI settings, TTS voices/rate
+- `%LOCALAPPDATA%\folioprism\text-cache.json` — Text & dictionary lookup cache (capped at 4,000 entries)
+- `%LOCALAPPDATA%\folioprism\cache\pdf\` — Translated PDF outputs (auto-pruned after 90 days / 2 GB)
+- `%LOCALAPPDATA%\folioprism\cache\tts\` — Synthesized MP3 cache (auto-pruned after 30 days / 500 MB)
 
-Logs are written asynchronously with 5 MB rotation to `runtime.log` (source mode) or `%TEMP%\media-reader.log` (packaged mode), with access tokens and lookup/TTS query texts redacted.
+Logs are written asynchronously with 5 MB rotation to `runtime.log` (source mode) or `%TEMP%\folioprism.log` (packaged mode), with access tokens and lookup/TTS query texts redacted.
+
+> Renamed from *媒体阅读器*: on first launch, the legacy `%LOCALAPPDATA%\media-reader` folder is copied to `%LOCALAPPDATA%\folioprism`, so existing settings and caches carry over.
 
 ### Security & Privacy Architecture
 
@@ -161,7 +165,7 @@ No open-source license has been added to this repository yet.
 
 ## 简体中文
 
-**FolioPrism（媒体阅读器）** 是一个跑在本机的**多媒体文档与双语伴读工作台**，采用 **Electron 桌面窗口 + 零第三方依赖的 Node.js `http` 本地服务**构建，无需数据库，也不依赖云端托管。
+**FolioPrism（棱阅）** 是一个跑在本机的**多媒体文档与双语伴读工作台**，采用 **Electron 桌面窗口 + 零第三方依赖的 Node.js `http` 本地服务**构建，无需数据库，也不依赖云端托管。
 
 主要面向「**把 Markdown 笔记、PDF 论文、Office 文档、源码和音视频放在本地文件夹中连续阅读**」的场景，尤其针对英文论文与技术文档的双语精读做了深度打磨。
 
@@ -229,7 +233,9 @@ node server.js --port=8080 --root="D:\Documents" --no-open
 npm run dist
 ```
 
-打包产物位于 `dist/媒体阅读器-win32-x64/`。将整个文件夹复制到其他 Windows 电脑，双击 `媒体阅读器.exe` 即可运行，目标机器无需安装 Node.js。（打包过程需联网下载 Electron 运行时。）
+打包产物位于 `dist/FolioPrism-win32-x64/`。将整个文件夹复制到其他 Windows 电脑，双击 `FolioPrism.exe` 即可运行，目标机器无需安装 Node.js。（打包过程需联网下载 Electron 运行时。）
+
+> **离线打包**：把对应版本的 `electron-v<版本>-win32-x64.zip` 放进任意目录，运行 `npm run dist` 前设置环境变量 `ELECTRON_ZIP_DIR` 指向该目录即可。
 
 ### 端到端验收脚本
 
@@ -269,12 +275,14 @@ build/              应用图标（icon.ico）
 ### 配置、缓存与日志
 
 配置与缓存均写入用户本地目录，不污染程序安装目录：
-- `%LOCALAPPDATA%\media-reader\config.json`：翻译服务、语言、OpenAI 接口、TTS 音色与语速设置
-- `%LOCALAPPDATA%\media-reader\text-cache.json`：文本翻译与查词缓存（上限 4,000 条）
-- `%LOCALAPPDATA%\media-reader\cache\pdf\`：PDF 翻译输出缓存（90 天 / 2 GB 自动淘汰）
-- `%LOCALAPPDATA%\media-reader\cache\tts\`：TTS 合成音频缓存（30 天 / 500 MB 自动淘汰）
+- `%LOCALAPPDATA%\folioprism\config.json`：翻译服务、语言、OpenAI 接口、TTS 音色与语速设置
+- `%LOCALAPPDATA%\folioprism\text-cache.json`：文本翻译与查词缓存（上限 4,000 条）
+- `%LOCALAPPDATA%\folioprism\cache\pdf\`：PDF 翻译输出缓存（90 天 / 2 GB 自动淘汰）
+- `%LOCALAPPDATA%\folioprism\cache\tts\`：TTS 合成音频缓存（30 天 / 500 MB 自动淘汰）
 
-运行日志异步批量写入并在达到 5 MB 时自动轮转：源码版位于项目根目录 `runtime.log`，打包版位于系统临时目录 `%TEMP%\media-reader.log`；访问令牌、查词及朗读原文均会脱敏处理。
+运行日志异步批量写入并在达到 5 MB 时自动轮转：源码版位于项目根目录 `runtime.log`，打包版位于系统临时目录 `%TEMP%\folioprism.log`；访问令牌、查词及朗读原文均会脱敏处理。
+
+> 从旧名「媒体阅读器」升级时，首次启动会把旧目录 `%LOCALAPPDATA%\media-reader` 自动复制到 `%LOCALAPPDATA%\folioprism`，翻译设置与缓存无需重配。
 
 ### 安全与隐私设计
 

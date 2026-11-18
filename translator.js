@@ -10,8 +10,8 @@
  *      「双语版 / 纯译文版」PDF，公式、图表、表格都留在原位。
  *
  * 配置与缓存都放在用户目录，不写进程序目录（打包成 asar 后是只读的）：
- *   %LOCALAPPDATA%\media-reader\config.json
- *   %LOCALAPPDATA%\media-reader\cache\
+ *   %LOCALAPPDATA%\folioprism\config.json
+ *   %LOCALAPPDATA%\folioprism\cache\
  */
 
 const fs = require('node:fs');
@@ -22,10 +22,23 @@ const crypto = require('node:crypto');
 const https = require('node:https');
 const http = require('node:http');
 
-const APP_DIR = path.join(
-  process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-  'media-reader'
-);
+const LOCAL_DIR = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+const APP_DIR = path.join(LOCAL_DIR, 'folioprism');
+const LEGACY_APP_DIR = path.join(LOCAL_DIR, 'media-reader');
+
+/**
+ * 改名迁移：老用户的翻译设置、词典/文本缓存、PDF 与 TTS 缓存都在
+ * media-reader 目录下。首次以新名字启动时整份复制过来，旧目录保留。
+ * 迁移失败不阻塞启动，最坏情况是让用户重新配一次翻译服务。
+ */
+try {
+  if (!fs.existsSync(APP_DIR) && fs.existsSync(LEGACY_APP_DIR)) {
+    fs.cpSync(LEGACY_APP_DIR, APP_DIR, { recursive: true });
+  }
+} catch (_) {
+  /* ignore */
+}
+
 const CONFIG_FILE = path.join(APP_DIR, 'config.json');
 const CACHE_DIR = path.join(APP_DIR, 'cache');
 const PDF_CACHE_DIR = path.join(CACHE_DIR, 'pdf');

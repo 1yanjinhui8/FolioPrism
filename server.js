@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * 本地多媒体阅读器 —— 服务端
+ * FolioPrism（棱阅）—— 服务端
  * 只用 Node 内置模块，零第三方依赖。
  */
 
@@ -18,10 +18,16 @@ const PUBLIC_DIR = path.join(__dir, 'public');
 const VENDOR_DIR = path.join(PUBLIC_DIR, 'vendor');
 /** 打包成 asar 后 __dirname 是只读的，日志只能落到系统临时目录 */
 const LOG_FILE = __dir.includes('app.asar')
-  ? path.join(os.tmpdir(), 'media-reader.log')
+  ? path.join(os.tmpdir(), 'folioprism.log')
   : path.join(__dir, 'runtime.log');
-/** 默认图片兜底目录；作者机器上的硬编码路径已移除 */
-const FALLBACK_IMAGE_ROOT = path.join(os.homedir(), 'Pictures', 'media-reader-images');
+/**
+ * 图片兜底目录：新名字优先，旧名字保留兼容——
+ * 改名之前用户放在 media-reader-images 里的图片不该突然找不到。
+ */
+const FALLBACK_IMAGE_ROOTS = [
+  path.join(os.homedir(), 'Pictures', 'FolioPrism-images'),
+  path.join(os.homedir(), 'Pictures', 'media-reader-images'),
+];
 
 /** 默认文档根目录：启动时可用 --root= 覆盖 */
 const DEFAULT_ROOT = path.join(os.homedir(), 'Documents');
@@ -650,7 +656,7 @@ function sendUnauthorized(res) {
     res,
     401,
     '需要访问令牌。\n\n' +
-      '请从「媒体阅读器」快捷方式启动，或在 `node server.js` 的启动输出里\n' +
+      '请从「FolioPrism 棱阅」快捷方式启动，或在 `node server.js` 的启动输出里\n' +
       '打开带 ?token=… 的地址；令牌只用于阻止本机其他程序读取你的文件。\n'
   );
 }
@@ -956,7 +962,11 @@ async function handleRequest(req, res) {
     // 3) 兜底：在 _images 下按文件名递归查找
     if (resolved) {
       const base = path.basename(resolved);
-      const found = await findByNameRecursive(FALLBACK_IMAGE_ROOT, base, 6, 20000);
+      let found = null;
+      for (const root of FALLBACK_IMAGE_ROOTS) {
+        found = await findByNameRecursive(root, base, 6, 20000);
+        if (found) break;
+      }
       if (found) {
         return sendFile(req, res, found);
       }

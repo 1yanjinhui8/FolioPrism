@@ -5,7 +5,7 @@
  *
  *   npm run dist
  *
- * 产物：dist/媒体阅读器-win32-x64/ —— 整个目录拷到别的电脑双击 exe 就能用，
+ * 产物：dist/FolioPrism-win32-x64/ —— 整个目录拷到别的电脑双击 exe 就能用，
  * 目标机器不需要装 Node.js，也不需要 npm install。
  */
 
@@ -13,7 +13,7 @@ const path = require('node:path');
 const { packager } = require('@electron/packager');
 
 const ROOT = __dirname;
-const APP_NAME = '媒体阅读器';
+const APP_NAME = 'FolioPrism';
 
 // 运行时用不到的：打包工具产物、开发脚本、Web 模式启动器、依赖源码
 // （public/vendor 里的浏览器版库是 prepare-vendor 早就拷好的，运行时不需要 node_modules）
@@ -36,13 +36,15 @@ packager({
   platform: 'win32',
   arch: 'x64',
   icon: path.join(ROOT, 'build', 'icon.ico'),
+  // 内网/断网时用本地 electron zip 目录打包（见 README 的打包说明）
+  electronZipDir: process.env.ELECTRON_ZIP_DIR || undefined,
   overwrite: true,
   asar: true,
   prune: false,
   ignore: IGNORE,
   win32metadata: {
-    CompanyName: 'Media Reader',
-    FileDescription: '本地多媒体阅读器',
+    CompanyName: 'FolioPrism',
+    FileDescription: 'FolioPrism 棱阅 · 本地多媒体文档与双语阅读工作台',
     ProductName: APP_NAME,
     InternalName: APP_NAME,
     OriginalFilename: APP_NAME + '.exe',

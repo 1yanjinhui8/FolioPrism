@@ -1,8 +1,8 @@
 {
-  "name": "media-reader",
-  "version": "1.2.0",
+  "name": "folioprism",
+  "version": "1.3.0",
   "private": true,
-  "description": "本地多媒体阅读器：Markdown / 代码 / PDF / Office 渲染，图片与视频真实显示，英文论文双语阅读",
+  "description": "FolioPrism（棱阅）：本地优先的多媒体文档与双语阅读工作台，支持 Markdown / PDF / Office / 代码与音视频",
   "main": "main.js",
   "scripts": {
     "setup": "node prepare-vendor.js",

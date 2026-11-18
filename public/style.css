@@ -1,5 +1,5 @@
 /* ==========================================================================
-   媒体阅读器 —— 样式
+   FolioPrism（棱阅）—— 样式
    设计原则：阅读区是主角，界面退到背景里。单一强调色贯穿全局。
    ========================================================================== */
 
@@ -502,6 +502,16 @@ body.toc-off #layout { grid-template-columns: 260px minmax(0, 1fr); }
   font-family: var(--font-mono); word-break: break-all;
 }
 #content .welcome { text-align: center; padding: 14vh 0; }
+
+/* 中文名跟在英文名后面：字号略小、颜色收敛，不抢英文主标题 */
+.brand-zh {
+  font-size: .52em;
+  font-weight: 500;
+  color: var(--text-soft);
+  letter-spacing: .08em;
+  vertical-align: .18em;
+  margin-left: .25em;
+}
 
 /* ---------------------------------------------------------------- 灯箱 */
 #lightbox {
