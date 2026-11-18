@@ -21,7 +21,7 @@
 
 ## English
 
-**FolioPrism** (棱阅 · repository: `media-reader`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at browsing local folders containing Markdown notes, academic PDFs, Office files, source code, and media side-by-side—especially for bilingual reading of English research papers and technical documentation.
+**FolioPrism** (棱阅 · repository: `FolioPrism`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at browsing local folders containing Markdown notes, academic PDFs, Office files, source code, and media side-by-side—especially for bilingual reading of English research papers and technical documentation.
 
 ### Key Features
 
@@ -56,8 +56,8 @@
 ### Quick Start
 
 ```bash
-git clone https://github.com/1yanjinhui8/media-reader.git
-cd media-reader
+git clone https://github.com/1yanjinhui8/FolioPrism.git
+cd FolioPrism
 npm install
 npm run setup
 npm start
@@ -202,8 +202,8 @@ No open-source license has been added to this repository yet.
 ### 快速开始
 
 ```bash
-git clone https://github.com/1yanjinhui8/media-reader.git
-cd media-reader
+git clone https://github.com/1yanjinhui8/FolioPrism.git
+cd FolioPrism
 npm install
 npm run setup
 npm start
