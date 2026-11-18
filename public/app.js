@@ -819,6 +819,23 @@
      需求 2：按扩展名分流渲染
      ========================================================================== */
 
+  /**
+   * 打开一个「外部送进来的」绝对路径：双击关联、菜单「打开文件」、拖拽都是这条。
+   * 先把侧栏根目录切到文件所在目录，让文件树能定位到它，再走正常渲染流程。
+   */
+  function openPath(filePath) {
+    const p = String(filePath || '').trim();
+    if (!p) return Promise.resolve(false);
+    const dir = dirOf(p);
+    if (dir && dir !== state.root) {
+      state.root = dir;
+      $('#root-input').value = dir;
+      try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
+      loadTree(dir);
+    }
+    return openFile(p);
+  }
+
   async function openFile(filePath) {
     // 快速连点两个文件时，只允许最后那次渲染结果落地；否则慢请求会把
     // 新文件的内容/state 覆盖掉，出现正文和面包屑串台
@@ -3442,6 +3459,36 @@
       native.onOpenFolder((dir) => { if (dir) setRoot(dir); });
     }
 
+    // 菜单「打开文件…」、第二个实例、双击关联文件：主进程把路径推过来
+    if (native && native.onOpenFile) {
+      native.onOpenFile((p) => { if (p) openPath(p); });
+    }
+
+    // 从资源管理器直接把文件拖进窗口
+    window.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer) return;
+      // 不 preventDefault 的话 Electron 会尝试把文件当页面导航，窗口会白屏
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (!dt || !dt.files || !dt.files.length) return;
+      e.preventDefault();
+      const file = dt.files[0];
+      let p = '';
+      try {
+        p = native && native.pathForFile ? native.pathForFile(file) : '';
+      } catch (_) {
+        p = '';
+      }
+      if (!p) {
+        toast('无法读取拖入文件的路径，请改用「文件 → 打开文件…」', 'err');
+        return;
+      }
+      openPath(p);
+    });
+
     // Electron 下走主进程的原生文件夹对话框：主进程是前台进程，
     // 不存在「对话框被前台锁定、弹到窗口后面」的问题，用起来和普通桌面软件一样。
     $('#btn-open-folder').addEventListener('click', async () => {
@@ -3754,30 +3801,57 @@
     } catch (_) {
       /* 隐私模式下 localStorage 可能不可用 */
     }
+    // 双击关联文件 / 右键「打开方式」/ 命令行启动带的文件，优先级最高
+    let launchFile = '';
+    const native = window.readerNative;
+    if (native && native.initialFile) {
+      try {
+        launchFile = (await native.initialFile()) || '';
+      } catch (_) {
+        launchFile = '';
+      }
+    }
+
     if (!lastRoot && lastFile) lastRoot = dirOf(lastFile);
+    if (launchFile) lastRoot = dirOf(launchFile);
 
     state.root = lastRoot || state.config.defaultRoot;
     $('#root-input').value = state.root;
     // 先把目标文件挂上，文件树据此自动展开它的上级目录
-    if (!state.currentFile) state.currentFile = lastFile || '';
+    if (!state.currentFile) state.currentFile = launchFile || lastFile || '';
 
     await loadTree(state.root);
 
-    // 优先回到上次读的文件；它不在了再退回默认文件
+    // 优先打开启动参数里的文件，否则回到上次读的文件；它不在了再退回默认文件
     const fallback = state.config.defaultFile;
-    const target = lastFile || fallback;
+    const target = launchFile || lastFile || fallback;
     if (target) {
       let opened = await openFile(target);
       if (!opened && fallback && target !== fallback) {
         try { localStorage.removeItem(LS.lastFile); } catch (_) { /* ignore */ }
         opened = await openFile(fallback);
+      } else if (!opened) {
+        // 上次读的文件被移走/删掉了：别再停在「载入失败」，回到欢迎页
+        try { localStorage.removeItem(LS.lastFile); } catch (_) { /* ignore */ }
+        showWelcome();
       }
     } else {
-      $('#content').innerHTML = '<div class="welcome"><h1>媒体阅读器</h1>' +
-        '<p class="muted">请在左侧选择一个文件开始阅读。</p></div>';
-      window.__reader.ready = true;
-      updateStats();
+      showWelcome();
     }
+  }
+
+  /** 没有可打开的文件时的首页；也用于清理失效的「上次阅读」 */
+  function showWelcome() {
+    state.currentFile = '';
+    const crumb = $('#crumb');
+    if (crumb) {
+      crumb.innerHTML = '';
+      crumb.title = '';
+    }
+    $('#content').innerHTML = '<div class="welcome"><h1>媒体阅读器</h1>' +
+      '<p class="muted">请在左侧选择一个文件开始阅读，或用「文件 → 打开文件…」（Ctrl+Shift+O）打开任意文档。</p></div>';
+    window.__reader.ready = true;
+    updateStats();
   }
 
   window.__reader = {

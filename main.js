@@ -22,6 +22,48 @@ const START_PORT = 7788;
 let mainWindow = null;
 let baseUrl = '';
 
+/**
+ * 命令行里带的文件路径。
+ *
+ * Windows 的「双击打开」「打开方式 → 媒体阅读器」都是把文件路径作为
+ * argv 传给 exe 的。以前这里完全不看 argv，所以双击 docx 只会把已经
+ * 开着的窗口拉到前台、或者恢复上次读的文件，新文件永远打不开。
+ */
+let pendingOpenFile = extractFileArg(process.argv);
+/** 最近一次打开文件的位置，下次弹框从这里接着选 */
+let lastDialogDir = '';
+
+function extractFileArg(argv) {
+  if (!Array.isArray(argv)) return '';
+  for (let i = 1; i < argv.length; i++) {
+    const a = String(argv[i] || '').trim();
+    if (!a || a.startsWith('-')) continue;
+    // 开发模式 `electron .`：argv[1] 是应用目录本身，不是用户文件
+    if (a === '.' || a === '..') continue;
+    const resolved = path.resolve(a);
+    if (resolved === path.resolve(__dirname)) continue;
+    try {
+      if (fs.statSync(resolved).isFile()) return resolved;
+    } catch (_) {
+      /* 不是已存在的文件就跳过 */
+    }
+  }
+  return '';
+}
+
+/** 把文件交给渲染进程打开；窗口还没建好时先记下来 */
+function openFileInRenderer(filePath) {
+  if (!filePath) return;
+  lastDialogDir = path.dirname(filePath);
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    pendingOpenFile = filePath;
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+  mainWindow.webContents.send('reader:open-file', filePath);
+}
+
 /* ------------------------------------------------------------------ */
 /* 原生对话框 / IPC                                                     */
 /* ------------------------------------------------------------------ */
@@ -48,8 +90,49 @@ async function pickFolder(startDir) {
   return r.filePaths[0];
 }
 
+/** 选单个文件（菜单「打开文件…」）。startDir 传上次打开文件所在目录 */
+async function pickFile(startDir) {
+  const defaultPath =
+    startDir && fs.existsSync(startDir)
+      ? startDir
+      : app.getPath('documents');
+
+  const opts = {
+    title: '选择要打开的文件',
+    defaultPath,
+    buttonLabel: '打开',
+    properties: ['openFile'],
+    filters: [
+      {
+        name: '可以阅读的文件',
+        extensions: [
+          'md', 'markdown', 'docx', 'pdf', 'xlsx', 'xls', 'csv', 'pptx',
+          'txt', 'log', 'html', 'htm', 'json', 'xml',
+          'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg',
+          'mp4', 'webm', 'mov', 'm4v', 'mkv',
+          'mp3', 'wav', 'm4a', 'flac',
+        ],
+      },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  };
+  const r = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, opts)
+    : await dialog.showOpenDialog(opts);
+
+  if (r.canceled || !r.filePaths.length) return null;
+  return r.filePaths[0];
+}
+
 function registerIpc() {
   ipcMain.handle('reader:pick-folder', (_e, startDir) => pickFolder(startDir));
+
+  // 启动参数里的文件只交付一次：刷新页面时不该又被拉回去
+  ipcMain.handle('reader:initial-file', () => {
+    const f = pendingOpenFile;
+    pendingOpenFile = '';
+    return f || '';
+  });
 
   ipcMain.handle('reader:open-external', (_e, url) => {
     if (/^https?:\/\//i.test(String(url || ''))) shell.openExternal(url);
@@ -71,6 +154,14 @@ async function menuOpenFolder() {
   mainWindow.webContents.send('reader:open-folder', dir);
 }
 
+/** 菜单里点「打开文件」：选完直接把文件推给渲染进程 */
+async function menuOpenFile() {
+  if (!mainWindow) return;
+  const file = await pickFile(lastDialogDir);
+  if (!file) return;
+  openFileInRenderer(file);
+}
+
 /* ------------------------------------------------------------------ */
 /* 菜单                                                                */
 /* ------------------------------------------------------------------ */
@@ -87,6 +178,7 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '打开文件夹…', accelerator: 'CmdOrCtrl+O', click: menuOpenFolder },
+        { label: '打开文件…', accelerator: 'CmdOrCtrl+Shift+O', click: menuOpenFile },
         { type: 'separator' },
         { label: '退出', role: 'quit' },
       ],
@@ -250,8 +342,15 @@ app.on('before-quit', () => {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  // 已经在运行时再双击一个文件：argv 里带着新文件，交给现有窗口打开，
+  // 而不是仅把窗口拉到前台（以前新文件会被无声丢弃）
+  app.on('second-instance', (_e, argv) => {
     if (!mainWindow) return;
+    const file = extractFileArg(argv);
+    if (file) {
+      openFileInRenderer(file);
+      return;
+    }
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   });

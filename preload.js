@@ -5,7 +5,7 @@
  * 只暴露必要的方法，页面里通过 window.readerNative 使用。
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('readerNative', {
   isElectron: true,
@@ -29,5 +29,33 @@ contextBridge.exposeInMainWorld('readerNative', {
     const handler = (_e, dir) => cb(dir);
     ipcRenderer.on('reader:open-folder', handler);
     return () => ipcRenderer.removeListener('reader:open-folder', handler);
+  },
+
+  /**
+   * 启动参数里带的文件（双击 docx / 右键「打开方式」）。
+   * 只返回一次，渲染进程启动时取走；之后的重启/刷新不再重复打开。
+   */
+  initialFile: () => ipcRenderer.invoke('reader:initial-file'),
+
+  /**
+   * 菜单「打开文件…」、第二个实例、文件关联都会走这里。返回取消订阅函数。
+   */
+  onOpenFile: (cb) => {
+    const handler = (_e, filePath) => cb(filePath);
+    ipcRenderer.on('reader:open-file', handler);
+    return () => ipcRenderer.removeListener('reader:open-file', handler);
+  },
+
+  /**
+   * 取拖入文件的真实路径。
+   * Electron 32 起 File.path 已被移除，必须由主进程侧的 webUtils 转换，
+   * 渲染进程自己是拿不到路径的。
+   */
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || '';
+    } catch (_) {
+      return '';
+    }
   },
 });
