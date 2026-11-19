@@ -10,6 +10,7 @@
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B%20(22%20LTS)-339933?style=flat-square)
 ![Architecture](https://img.shields.io/badge/Server-Zero--Dependency%20HTTP-orange?style=flat-square)
 ![Local First](https://img.shields.io/badge/Privacy-Local--First-brightgreen?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
 
 [English](#english) · [简体中文](#简体中文)
 
@@ -157,7 +158,7 @@ Although the server only listens on `127.0.0.1`, localhost is still exposed to o
 
 ### License
 
-No open-source license has been added to this repository yet.
+Released under the [MIT License](LICENSE). You are free to use, modify, distribute and sublicense this software, provided the copyright notice and permission notice are retained.
 
 ---
 
@@ -303,4 +304,4 @@ build/              应用图标（icon.ico）
 
 ### 许可证
 
-本项目暂未添加开源许可证。
+本项目基于 [MIT License](LICENSE) 开源。你可以自由使用、修改、分发与再授权，只需保留版权声明与许可声明。
