@@ -9,6 +9,9 @@ runtime.log
 # 由 npm run setup 从 node_modules 复制生成
 public/vendor/
 
+# 本机用户数据备份（阅读进度、缓存、配置），不随仓库分发
+data-backup/
+
 # 编辑器 / 系统
 .vscode/
 .idea/

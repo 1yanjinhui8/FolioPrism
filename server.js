@@ -1026,20 +1026,107 @@ async function handleRequest(req, res) {
     const text = parsed.searchParams.get('text') || '';
     const voiceParam = parsed.searchParams.get('voice') || '';
     const langParam = parsed.searchParams.get('lang') || '';
+    const tStart = Date.now();
     try {
-      const file = await translator.synthesizeSpeech(text, {
+      const result = await translator.streamSpeech(text, {
         voice: voiceParam,
         rate: parsed.searchParams.get('rate'),
         lang: langParam,
       });
-      res.setHeader('Cache-Control', 'public, max-age=604800');
-      res.setHeader('X-TTS-Voice', translator.pickVoice(text, voiceParam, langParam));
-      return sendFile(req, res, file);
+      if (result.hit) {
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+        res.setHeader('X-TTS-Voice', result.voice);
+        res.setHeader('Server-Timing', 'tts;desc="cache-hit";dur=' + (Date.now() - tStart));
+        return sendFile(req, res, result.file);
+      }
+
+      await new Promise((resolve) => {
+        let settled = false;
+        let headSent = false;
+        let unsub = null;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          if (unsub) {
+            const fn = unsub;
+            unsub = null;
+            fn();
+          }
+          resolve();
+        };
+
+        const ensureHead = () => {
+          if (headSent) return true;
+          if (res.destroyed || res.writableEnded) return false;
+          headSent = true;
+          res.writeHead(200, {
+            'Content-Type': 'audio/mpeg',
+            'Accept-Ranges': 'none',
+            'Cache-Control': 'public, max-age=604800',
+            'X-TTS-Voice': result.voice,
+            'Server-Timing': 'tts;desc="stream";dur=' + (Date.now() - tStart),
+          });
+          return true;
+        };
+
+        res.on('close', () => {
+          finish();
+        });
+
+        unsub = result.subscribe({
+          onChunk: (chunk) => {
+            if (settled) return;
+            if (!ensureHead()) {
+              finish();
+              return;
+            }
+            if (req.method === 'HEAD') {
+              try { res.end(); } catch (_) {}
+              finish();
+              return;
+            }
+            if (!res.writableEnded && !res.destroyed) {
+              try { res.write(chunk); } catch (_) { finish(); }
+            }
+          },
+          onEnd: () => {
+            if (settled) return;
+            if (headSent && !res.writableEnded && !res.destroyed) {
+              try { res.end(); } catch (_) {}
+            } else if (!headSent && !res.headersSent) {
+              sendJson(res, 502, { error: '没有生成音频', code: 'tts-empty' });
+            }
+            finish();
+          },
+          onError: (err) => {
+            if (settled) return;
+            if (!headSent && !res.headersSent) {
+              const code = (err && err.code) || '';
+              const status = code === 'tts-missing' ? 409 : code === 'bad-request' ? 400 : 502;
+              sendJson(res, status, {
+                error: (err && err.message) || String(err),
+                code,
+              });
+            } else {
+              try { res.destroy(); } catch (_) {}
+            }
+            finish();
+          },
+        });
+        if (settled && unsub) {
+          const fn = unsub;
+          unsub = null;
+          fn();
+        }
+      });
+      return;
     } catch (e) {
-      const status = e && e.code === 'tts-missing' ? 409 : 400;
+      const code = (e && e.code) || '';
+      const status = code === 'tts-missing' ? 409 : code === 'bad-request' ? 400 : 502;
       return sendJson(res, status, {
         error: (e && e.message) || String(e),
-        code: (e && e.code) || '',
+        code,
       });
     }
   }
@@ -1052,7 +1139,9 @@ async function handleRequest(req, res) {
       const pages = await translator.extractPdfText(p);
       let lang = '';
       try {
-        const d = await translator.detectLanguage(pages.slice(0, 2).join(' ').slice(0, 4000));
+        const d = await translator.detectLanguage(pages.slice(0, 2).join(' ').slice(0, 4000), {
+          localOnly: true,
+        });
         lang = d.lang || '';
       } catch (_) {
         /* 检测失败不影响朗读 */
@@ -1330,6 +1419,7 @@ function start(opts) {
       candidates,
       (port) => {
         onReady(port, openBrowser);
+        translator.warmTtsWorker();
         resolve(port);
       },
       reject
@@ -1341,8 +1431,11 @@ module.exports = {
   start,
   getPort: () => ACTUAL_PORT,
   getToken: () => ACCESS_TOKEN,
-  /** 退出前调用：结束仍在跑的 pdf2zh / tts / 安装子进程，避免残留孤儿进程 */
-  shutdown: () => translator.killAllChildren(),
+  /** 退出前调用：关闭服务并结束仍在跑的 pdf2zh / tts / 安装子进程，避免残留孤儿进程 */
+  shutdown: () => {
+    try { server.close(); } catch (_) {}
+    translator.killAllChildren();
+  },
 };
 
 /* 直接 `node server.js` 运行时，行为与以前完全一致 */

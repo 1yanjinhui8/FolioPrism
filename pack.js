@@ -26,6 +26,11 @@ const IGNORE = [
   /^\/prepare-vendor\.js$/,
   /^\/start\.bat$/,
   /^\/pack\.js$/,
+  // 开发期资产：测试脚本、安装包脚本，运行时都不需要
+  /^\/test(\/|$)/,
+  /^\/installer(\/|$)/,
+  // 本机用户数据备份（阅读进度、缓存、配置），绝不能打进分发包
+  /^\/data-backup(\/|$)/,
 ];
 
 packager({

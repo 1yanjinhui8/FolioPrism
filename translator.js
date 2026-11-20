@@ -222,6 +222,7 @@ function sanitizePatch(patch) {
 function updateConfig(patch) {
   config = deepMerge(config, sanitizePatch(patch));
   saveConfig();
+  invalidateToolCache();
   return config;
 }
 
@@ -250,6 +251,35 @@ function publicConfig() {
 /* 可执行文件探测                                                        */
 /* ------------------------------------------------------------------ */
 
+const TOOL_CACHE_TTL_EMPTY = 10000;
+const toolCache = {
+  uv: null,
+  pdf2zh: null,
+  edgeTts: null,
+  edgeTtsPython: null,
+};
+
+function invalidateToolCache() {
+  toolCache.uv = null;
+  toolCache.pdf2zh = null;
+  toolCache.edgeTts = null;
+  toolCache.edgeTtsPython = null;
+}
+
+function getCachedTool(key, probeFn) {
+  const entry = toolCache[key];
+  if (entry) {
+    if (entry.value) {
+      if (fs.existsSync(entry.value)) return entry.value;
+    } else if (Date.now() - entry.at < TOOL_CACHE_TTL_EMPTY) {
+      return '';
+    }
+  }
+  const value = probeFn() || '';
+  toolCache[key] = { value, at: Date.now() };
+  return value;
+}
+
 function which(name) {
   try {
     const out = cp.execFileSync('where.exe', [name], {
@@ -266,7 +296,8 @@ function which(name) {
 }
 
 function firstExisting(list) {
-  for (const p of list) {
+  for (const item of list) {
+    const p = typeof item === 'function' ? item() : item;
     if (p && fs.existsSync(p)) return p;
   }
   return '';
@@ -274,37 +305,56 @@ function firstExisting(list) {
 
 function findUv() {
   if (config.install.uvPath && fs.existsSync(config.install.uvPath)) return config.install.uvPath;
-  const home = os.homedir();
-  return firstExisting([
-    which('uv'),
-    path.join(home, '.local', 'bin', 'uv.exe'),
-    path.join(home, '.cargo', 'bin', 'uv.exe'),
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'uv', 'uv.exe'),
-  ]);
+  return getCachedTool('uv', () => {
+    const home = os.homedir();
+    return firstExisting([
+      path.join(home, '.local', 'bin', 'uv.exe'),
+      path.join(home, '.cargo', 'bin', 'uv.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'uv', 'uv.exe'),
+      () => which('uv'),
+    ]);
+  });
 }
 
 function findPdf2zh() {
   if (config.pdf.pdf2zhPath && fs.existsSync(config.pdf.pdf2zhPath)) return config.pdf.pdf2zhPath;
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-  const home = os.homedir();
-  return firstExisting([
-    which('pdf2zh'),
-    path.join(appData, 'uv', 'tools', 'pdf2zh', 'Scripts', 'pdf2zh.exe'),
-    path.join(home, '.local', 'bin', 'pdf2zh.exe'),
-    path.join(home, '.local', 'bin', 'pdf2zh'),
-  ]);
+  return getCachedTool('pdf2zh', () => {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const home = os.homedir();
+    return firstExisting([
+      path.join(appData, 'uv', 'tools', 'pdf2zh', 'Scripts', 'pdf2zh.exe'),
+      path.join(home, '.local', 'bin', 'pdf2zh.exe'),
+      path.join(home, '.local', 'bin', 'pdf2zh'),
+      () => which('pdf2zh'),
+    ]);
+  });
 }
 
 function findEdgeTts() {
   if (config.tts.edgeTtsPath && fs.existsSync(config.tts.edgeTtsPath)) return config.tts.edgeTtsPath;
-  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-  const home = os.homedir();
-  // 优先用 uv 工具目录里的新版：PATH 上可能有别的项目装的旧版（协议会失效）
-  return firstExisting([
-    path.join(appData, 'uv', 'tools', 'edge-tts', 'Scripts', 'edge-tts.exe'),
-    path.join(home, '.local', 'bin', 'edge-tts.exe'),
-    which('edge-tts'),
-  ]);
+  return getCachedTool('edgeTts', () => {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const home = os.homedir();
+    // 优先用 uv 工具目录里的新版：PATH 上可能有别的项目装的旧版（协议会失效）
+    return firstExisting([
+      path.join(appData, 'uv', 'tools', 'edge-tts', 'Scripts', 'edge-tts.exe'),
+      path.join(home, '.local', 'bin', 'edge-tts.exe'),
+      () => which('edge-tts'),
+    ]);
+  });
+}
+
+function findEdgeTtsPython() {
+  const exe = findEdgeTts();
+  if (!exe) return '';
+  const pyName = process.platform === 'win32' ? 'python.exe' : 'python';
+  const sibling = path.join(path.dirname(exe), pyName);
+  if (fs.existsSync(sibling)) return sibling;
+  return getCachedTool('edgeTtsPython', () => {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const uvPy = path.join(appData, 'uv', 'tools', 'edge-tts', 'Scripts', pyName);
+    return fs.existsSync(uvPy) ? uvPy : '';
+  });
 }
 
 function toolPythonPath() {
@@ -1075,6 +1125,779 @@ async function dictLookup(text) {
 
 const TTS_VOICE_RE = /^[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural$/;
 const ttsPending = new Map();
+let ttsCacheDirEnsured = false;
+let ttsTmpSeq = 0;
+
+function ensureTtsCacheDir() {
+  if (ttsCacheDirEnsured) return;
+  ensureDir(TTS_CACHE_DIR);
+  ttsCacheDirEnsured = true;
+}
+
+const TTS_WORKER_SCRIPT = [
+  'import asyncio, base64, json, socket, sys, time',
+  'import aiohttp, edge_tts',
+  '',
+  'try:',
+  '    from xml.sax.saxutils import escape as _xml_escape',
+  '    from edge_tts.constants import WSS_URL, WSS_HEADERS, SEC_MS_GEC_VERSION',
+  '    from edge_tts.drm import DRM',
+  '    from edge_tts.communicate import (',
+  '        _SSL_CTX,',
+  '        connect_id,',
+  '        date_to_string,',
+  '        get_headers_and_data,',
+  '        mkssml,',
+  '        remove_incompatible_characters,',
+  '        split_text_by_byte_length,',
+  '        ssml_headers_plus_data,',
+  '    )',
+  '    from edge_tts.data_classes import TTSConfig',
+  '    from edge_tts.exceptions import NoAudioReceived, UnexpectedResponse, UnknownResponse, WebSocketError',
+  '    HAS_STANDBY_WS = True',
+  'except Exception:',
+  '    HAS_STANDBY_WS = False',
+  '',
+  'class SharedTCPConnector(aiohttp.TCPConnector):',
+  '    def __init__(self, *args, **kwargs):',
+  '        super().__init__(*args, **kwargs)',
+  '        self._ip_penalty = {}',
+  '        self._ip_latency = {}',
+  '        self._rr = 0',
+  '    async def close(self):',
+  '        return None',
+  '    async def real_close(self):',
+  '        return await super().close()',
+  '    def mark_bad_ip(self, ip):',
+  '        if ip:',
+  '            self._ip_penalty[ip] = time.monotonic() + 30.0',
+  '    def mark_good_ip(self, ip, lat_ms=None):',
+  '        if ip:',
+  '            self._ip_penalty.pop(ip, None)',
+  '            if lat_ms is not None:',
+  '                prev = self._ip_latency.get(ip)',
+  '                self._ip_latency[ip] = lat_ms if prev is None else (prev * 0.5 + lat_ms * 0.5)',
+  '    def ip_score(self, ip):',
+  '        now = time.monotonic()',
+  '        if self._ip_penalty.get(ip, 0) > now:',
+  '            return 100000.0',
+  '        return self._ip_latency.get(ip, 500.0)',
+  '    async def _resolve_host(self, host, port, traces=None):',
+  '        res = await super()._resolve_host(host, port, traces=traces)',
+  '        if len(res) > 1:',
+  '            now = time.monotonic()',
+  '            good = [r for r in res if self._ip_penalty.get(r.get("host"), 0) <= now]',
+  '            bad = [r for r in res if self._ip_penalty.get(r.get("host"), 0) > now]',
+  '            if good:',
+  '                idx = self._rr % len(good)',
+  '                self._rr += 1',
+  '                return good[idx:] + good[:idx] + bad',
+  '        return res',
+  '',
+  'async def main():',
+  '    # 优先走 IPv4，规避双栈网络中 IPv6 路由卡顿；失败时自动退回 AF_UNSPEC',
+  '    connector_v4 = SharedTCPConnector(limit=16, ttl_dns_cache=300, keepalive_timeout=60, family=socket.AF_INET)',
+  '    connector_any = SharedTCPConnector(limit=16, ttl_dns_cache=300, keepalive_timeout=60)',
+  '    tasks = {}',
+  '    shutdown_evt = asyncio.Event()',
+  '    loop = asyncio.get_running_loop()',
+  '    standby_pool = []',
+  '    STANDBY_TARGET = 4',
+  '    MAX_STANDBY_AGE = 18.0',
+  '    HEDGE_DELAY = 0.70',
+  '    refill_running = False',
+  '    session_v4 = None',
+  '    session_any = None',
+  '    if HAS_STANDBY_WS:',
+  '        timeout_cfg = aiohttp.ClientTimeout(total=None, connect=None, sock_connect=10, sock_read=60)',
+  '        session_v4 = aiohttp.ClientSession(connector=connector_v4, trust_env=True, timeout=timeout_cfg)',
+  '        session_any = aiohttp.ClientSession(connector=connector_any, trust_env=True, timeout=timeout_cfg)',
+  '',
+  '    def emit(obj):',
+  '        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\\n")',
+  '        sys.stdout.flush()',
+  '',
+  '    def ws_peer_ip(ws):',
+  '        try:',
+  '            tr = getattr(getattr(ws, "_writer", None), "transport", None)',
+  '            if tr is None:',
+  '                tr = getattr(getattr(getattr(ws, "_response", None), "connection", None), "transport", None)',
+  '            peer = tr.get_extra_info("peername") if tr else None',
+  '            return peer[0] if peer else None',
+  '        except Exception:',
+  '            return None',
+  '',
+  '    async def warm_dns():',
+  '        try:',
+  '            await loop.getaddrinfo("speech.platform.bing.com", 443, family=socket.AF_INET, type=socket.SOCK_STREAM)',
+  '        except Exception:',
+  '            pass',
+  '',
+  '    async def close_ws_quiet(ws):',
+  '        if ws is None:',
+  '            return',
+  '        try:',
+  '            await ws.close()',
+  '        except Exception:',
+  '            pass',
+  '',
+  '    async def open_ws(use_any=False):',
+  '        sess = session_any if use_any else session_v4',
+  '        for attempt in range(2):',
+  '            try:',
+  '                return await sess.ws_connect(',
+  '                    f"{WSS_URL}&ConnectionId={connect_id()}"',
+  '                    f"&Sec-MS-GEC={DRM.generate_sec_ms_gec()}"',
+  '                    f"&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}",',
+  '                    compress=15,',
+  '                    headers=DRM.headers_with_muid(WSS_HEADERS),',
+  '                    ssl=_SSL_CTX,',
+  '                )',
+  '            except aiohttp.ClientResponseError as e:',
+  '                if e.status == 403 and attempt == 0:',
+  '                    DRM.handle_client_response_error(e)',
+  '                    continue',
+  '                raise',
+  '',
+  '    async def prune_standby():',
+  '        now = time.monotonic()',
+  '        alive = []',
+  '        to_close = []',
+  '        for ws, opened_at in standby_pool:',
+  '            if not ws.closed and (now - opened_at) < MAX_STANDBY_AGE:',
+  '                alive.append((ws, opened_at))',
+  '            else:',
+  '                to_close.append(ws)',
+  '        standby_pool[:] = alive',
+  '        for ws in to_close:',
+  '            await close_ws_quiet(ws)',
+  '',
+  '    async def refill_standby():',
+  '        nonlocal refill_running',
+  '        if not HAS_STANDBY_WS or refill_running or shutdown_evt.is_set():',
+  '            return',
+  '        refill_running = True',
+  '        try:',
+  '            await prune_standby()',
+  '            needed = STANDBY_TARGET - len(standby_pool)',
+  '            if needed > 0 and not shutdown_evt.is_set():',
+  '                async def open_one():',
+  '                    try:',
+  '                        ws = await open_ws(use_any=False)',
+  '                    except aiohttp.ClientConnectorError:',
+  '                        ws = await open_ws(use_any=True)',
+  '                    if shutdown_evt.is_set():',
+  '                        await close_ws_quiet(ws)',
+  '                        return',
+  '                    standby_pool.append((ws, time.monotonic()))',
+  '                await asyncio.gather(*(open_one() for _ in range(needed)), return_exceptions=True)',
+  '        finally:',
+  '            refill_running = False',
+  '',
+  '    def schedule_refill():',
+  '        if HAS_STANDBY_WS and not shutdown_evt.is_set() and not refill_running:',
+  '            asyncio.create_task(refill_standby())',
+  '',
+  '    async def standby_keeper():',
+  '        if not HAS_STANDBY_WS:',
+  '            return',
+  '        schedule_refill()',
+  '        while not shutdown_evt.is_set():',
+  '            try:',
+  '                await asyncio.wait_for(shutdown_evt.wait(), timeout=10.0)',
+  '                break',
+  '            except asyncio.TimeoutError:',
+  '                await prune_standby()',
+  '                if len(standby_pool) < STANDBY_TARGET:',
+  '                    schedule_refill()',
+  '',
+  '    async def checkout_ws(avoid_ip=None):',
+  '        now = time.monotonic()',
+  '        alive = []',
+  '        to_close = []',
+  '        for ws, opened_at in standby_pool:',
+  '            if ws.closed or (now - opened_at) >= MAX_STANDBY_AGE:',
+  '                to_close.append(ws)',
+  '            else:',
+  '                alive.append((ws, opened_at))',
+  '        standby_pool[:] = alive',
+  '        best_idx = -1',
+  '        best_score = 1e12',
+  '        for i, (ws, _) in enumerate(standby_pool):',
+  '            ip = ws_peer_ip(ws)',
+  '            if avoid_ip and ip == avoid_ip:',
+  '                continue',
+  '            sc = connector_v4.ip_score(ip)',
+  '            if sc < best_score:',
+  '                best_score = sc',
+  '                best_idx = i',
+  '        if best_idx < 0 and standby_pool:',
+  '            best_idx = len(standby_pool) - 1',
+  '        picked = standby_pool.pop(best_idx)[0] if best_idx >= 0 else None',
+  '        schedule_refill()',
+  '        try:',
+  '            for ws in to_close:',
+  '                await close_ws_quiet(ws)',
+  '        except BaseException:',
+  '            if picked is not None:',
+  '                await close_ws_quiet(picked)',
+  '            raise',
+  '        return picked, (picked is not None)',
+  '',
+  '    def parse_ws_msg(msg):',
+  '        if msg.type == aiohttp.WSMsgType.TEXT:',
+  '            encoded_data = msg.data.encode("utf-8")',
+  '            parameters, _ = get_headers_and_data(encoded_data, encoded_data.find(b"\\r\\n\\r\\n"))',
+  '            p = parameters.get(b"Path", None)',
+  '            if p == b"turn.end":',
+  '                return ("end", None)',
+  '            if p not in (b"response", b"turn.start", b"audio.metadata"):',
+  '                raise UnknownResponse("Unknown path received")',
+  '            return ("meta", None)',
+  '        if msg.type == aiohttp.WSMsgType.BINARY:',
+  '            if len(msg.data) < 2:',
+  '                raise UnexpectedResponse("We received a binary message, but it is missing the header length.")',
+  '            header_length = int.from_bytes(msg.data[:2], "big")',
+  '            if header_length > len(msg.data):',
+  '                raise UnexpectedResponse("The header length is greater than the length of the data.")',
+  '            parameters, data = get_headers_and_data(msg.data, header_length)',
+  '            if parameters.get(b"Path") != b"audio":',
+  '                raise UnexpectedResponse("Received binary message, but the path is not audio.")',
+  '            content_type = parameters.get(b"Content-Type", None)',
+  '            if content_type not in (b"audio/mpeg", None):',
+  '                raise UnexpectedResponse("Received binary message, but with an unexpected Content-Type.")',
+  '            if content_type is None:',
+  '                if len(data) == 0:',
+  '                    return ("meta", None)',
+  '                raise UnexpectedResponse("Received binary message with no Content-Type, but with data.")',
+  '            if len(data) == 0:',
+  '                raise UnexpectedResponse("Received binary message, but it is missing the audio data.")',
+  '            return ("audio", data)',
+  '        if msg.type == aiohttp.WSMsgType.ERROR:',
+  '            raise WebSocketError(msg.data if msg.data else "Unknown error")',
+  '        if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):',
+  '            return ("closed", None)',
+  '        return ("meta", None)',
+  '',
+  '    async def open_or_checkout(avoid_ip=None):',
+  '        ws, from_pool = await checkout_ws(avoid_ip=avoid_ip)',
+  '        if ws is not None:',
+  '            return ws, from_pool',
+  '        try:',
+  '            return await open_ws(use_any=False), False',
+  '        except aiohttp.ClientConnectorError:',
+  '            return await open_ws(use_any=True), False',
+  '',
+  '    async def start_and_get_first(ws, tc, part_bytes, timeout_s):',
+  '        t0 = time.monotonic()',
+  '        cfg_json = json.dumps({"context": {"synthesis": {"audio": {"metadataoptions": {"sentenceBoundaryEnabled": "true", "wordBoundaryEnabled": "false"}, "outputFormat": "audio-24khz-48kbitrate-mono-mp3"}}}})',
+  '        await ws.send_str(',
+  '            f"X-Timestamp:{date_to_string()}\\r\\n"',
+  '            "Content-Type:application/json; charset=utf-8\\r\\n"',
+  '            "Path:speech.config\\r\\n\\r\\n"',
+  '            + cfg_json + "\\r\\n"',
+  '        )',
+  '        await ws.send_str(',
+  '            ssml_headers_plus_data(',
+  '                connect_id(),',
+  '                date_to_string(),',
+  '                mkssml(tc, part_bytes),',
+  '            )',
+  '        )',
+  '        while True:',
+  '            msg = await ws.receive(timeout=timeout_s)',
+  '            kind, data = parse_ws_msg(msg)',
+  '            if kind == "audio":',
+  '                lat_ms = (time.monotonic() - t0) * 1000.0',
+  '                return ws, data, lat_ms',
+  '            if kind == "end":',
+  '                raise NoAudioReceived("No audio was received. Please verify that your parameters are correct.")',
+  '            if kind == "closed":',
+  '                raise WebSocketError("WebSocket closed before audio")',
+  '',
+  '    async def continue_ws_stream(job_id, ws):',
+  '        while True:',
+  '            msg = await ws.receive(timeout=60.0)',
+  '            kind, data = parse_ws_msg(msg)',
+  '            if kind == "audio":',
+  '                emit({"type": "chunk", "id": job_id, "data": base64.b64encode(data).decode("ascii")})',
+  '            elif kind in ("end", "closed"):',
+  '                break',
+  '',
+  '    async def run_with_connector(job_id, text, voice, rate, conn):',
+  '        got_audio = False',
+  '        comm = edge_tts.Communicate(text, voice, rate=rate, connector=conn)',
+  '        async for msg in comm.stream():',
+  '            if msg.get("type") == "audio":',
+  '                data = msg.get("data")',
+  '                if data:',
+  '                    got_audio = True',
+  '                    emit({"type": "chunk", "id": job_id, "data": base64.b64encode(data).decode("ascii")})',
+  '        return got_audio',
+  '',
+  '    async def stream_part_hedged(job_id, tc, part_bytes, speakable, can_hedge):',
+  '        async def run_probe(avoid_ip, timeout_s, ip_box=None):',
+  '            ws, _ = await open_or_checkout(avoid_ip=avoid_ip)',
+  '            ip = ws_peer_ip(ws)',
+  '            if ip_box is not None:',
+  '                ip_box[0] = ip',
+  '            try:',
+  '                res = await start_and_get_first(ws, tc, part_bytes, timeout_s)',
+  '                connector_v4.mark_good_ip(ip, res[2])',
+  '                return res',
+  '            except asyncio.CancelledError:',
+  '                await close_ws_quiet(ws)',
+  '                raise',
+  '            except Exception as e:',
+  '                if speakable or not isinstance(e, NoAudioReceived):',
+  '                    connector_v4.mark_bad_ip(ip)',
+  '                await close_ws_quiet(ws)',
+  '                raise',
+  '',
+  '        ip1_box = [None]',
+  '        t1 = asyncio.create_task(run_probe(None, 4.0 if can_hedge else 8.0, ip1_box))',
+  '        t2 = None',
+  '        t3 = None',
+  '        win_ws = None',
+  '        first_chunk = None',
+  '        try:',
+  '            if not can_hedge:',
+  '                win_ws, first_chunk, _ = await t1',
+  '            else:',
+  '                done, _ = await asyncio.wait({t1}, timeout=HEDGE_DELAY)',
+  '                if t1 in done and not t1.cancelled() and t1.exception() is None:',
+  '                    win_ws, first_chunk, _ = t1.result()',
+  '                else:',
+  '                    t2 = asyncio.create_task(run_probe(ip1_box[0], 4.0))',
+  '                    pending = {t2} if t1 in done else {t1, t2}',
+  '                    last_err = t1.exception() if (t1 in done and not t1.cancelled()) else None',
+  '                    while pending:',
+  '                        done2, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)',
+  '                        for d in done2:',
+  '                            if not d.cancelled() and d.exception() is None:',
+  '                                win_ws, first_chunk, _ = d.result()',
+  '                                break',
+  '                            elif not d.cancelled():',
+  '                                last_err = d.exception()',
+  '                        if win_ws is not None:',
+  '                            break',
+  '                    if win_ws is None:',
+  '                        # 若两路并发均偶发失败（如边缘节点抖动），再做一次全新直连兜底',
+  '                        t3 = asyncio.create_task(run_probe(None, 8.0))',
+  '                        win_ws, first_chunk, _ = await t3',
+  '        finally:',
+  '            for task in (t1, t2, t3):',
+  '                if task is None:',
+  '                    continue',
+  '                if not task.done():',
+  '                    task.cancel()',
+  '                    try:',
+  '                        await task',
+  '                    except BaseException:',
+  '                        pass',
+  '                elif not task.cancelled() and task.exception() is None:',
+  '                    try:',
+  '                        cand_ws = task.result()[0]',
+  '                        if cand_ws is not win_ws:',
+  '                            await close_ws_quiet(cand_ws)',
+  '                    except Exception:',
+  '                        pass',
+  '        try:',
+  '            emit({"type": "chunk", "id": job_id, "data": base64.b64encode(first_chunk).decode("ascii")})',
+  '            await continue_ws_stream(job_id, win_ws)',
+  '        finally:',
+  '            await close_ws_quiet(win_ws)',
+  '',
+  '    async def run_standby_synth(job_id, text, voice, rate):',
+  '        tc = TTSConfig(voice, rate, "+0%", "+0Hz", "SentenceBoundary")',
+  '        parts = list(split_text_by_byte_length(_xml_escape(remove_incompatible_characters(text)), 4096))',
+  '        speakable = any(ch.isalnum() for ch in text)',
+  '        got_audio = False',
+  '        for idx, part in enumerate(parts):',
+  '            await stream_part_hedged(job_id, tc, part, speakable, (not got_audio and speakable))',
+  '            got_audio = True',
+  '        return got_audio',
+  '',
+  '    async def run_synth(job_id, text, voice, rate):',
+  '        try:',
+  '            if HAS_STANDBY_WS:',
+  '                got_audio = await run_standby_synth(job_id, text, voice, rate)',
+  '            else:',
+  '                try:',
+  '                    got_audio = await run_with_connector(job_id, text, voice, rate, connector_v4)',
+  '                except aiohttp.ClientConnectorError:',
+  '                    got_audio = await run_with_connector(job_id, text, voice, rate, connector_any)',
+  '            if not got_audio:',
+  '                emit({"type": "error", "id": job_id, "error": "没有生成音频"})',
+  '            else:',
+  '                emit({"type": "end", "id": job_id})',
+  '        except asyncio.CancelledError:',
+  '            pass',
+  '        except Exception as e:',
+  '            emit({"type": "error", "id": job_id, "error": str(e)})',
+  '        finally:',
+  '            tasks.pop(job_id, None)',
+  '',
+  '    def handle_cmd(cmd):',
+  '        t = cmd.get("type")',
+  '        jid = cmd.get("id")',
+  '        if t == "synth":',
+  '            text = cmd.get("text", "")',
+  '            voice = cmd.get("voice", "en-US-AriaNeural")',
+  '            rate = cmd.get("rate", "+0%")',
+  '            tasks[jid] = asyncio.create_task(run_synth(jid, text, voice, rate))',
+  '        elif t == "cancel":',
+  '            task = tasks.pop(jid, None)',
+  '            if task:',
+  '                task.cancel()',
+  '        elif t == "ping":',
+  '            emit({"type": "pong", "id": jid})',
+  '',
+  '    def read_stdin():',
+  '        try:',
+  '            while True:',
+  '                raw = sys.stdin.readline()',
+  '                if not raw:',
+  '                    break',
+  '                line = raw.strip()',
+  '                if not line:',
+  '                    continue',
+  '                try:',
+  '                    cmd = json.loads(line)',
+  '                except Exception:',
+  '                    continue',
+  '                loop.call_soon_threadsafe(handle_cmd, cmd)',
+  '        finally:',
+  '            loop.call_soon_threadsafe(shutdown_evt.set)',
+  '',
+  '    emit({"type": "ready"})',
+  '    asyncio.create_task(warm_dns())',
+  '    keeper_task = asyncio.create_task(standby_keeper())',
+  '    reader_fut = loop.run_in_executor(None, read_stdin)',
+  '    await shutdown_evt.wait()',
+  '    keeper_task.cancel()',
+  '    for t in list(tasks.values()):',
+  '        t.cancel()',
+  '    for ws, _ in standby_pool:',
+  '        await close_ws_quiet(ws)',
+  '    standby_pool.clear()',
+  '    try:',
+  '        await reader_fut',
+  '    except Exception:',
+  '        pass',
+  '    if session_v4 is not None:',
+  '        await session_v4.close()',
+  '    if session_any is not None:',
+  '        await session_any.close()',
+  '    await connector_v4.real_close()',
+  '    await connector_any.real_close()',
+  '',
+  'asyncio.run(main())',
+].join('\n');
+
+let ttsWorker = null;
+const brokenWorkerPythons = new Set();
+const workerPreReadyFailures = new Map();
+const MAX_PRE_READY_FAILURES = 3;
+
+function resetTtsWorker() {
+  const w = ttsWorker;
+  ttsWorker = null;
+  if (!w) return;
+  w.stopping = true;
+  if (w.startupTimer) clearTimeout(w.startupTimer);
+  if (typeof w.finishStartup === 'function') w.finishStartup(false);
+  for (const job of w.jobs.values()) {
+    if (job.timer) clearTimeout(job.timer);
+    job.onError(new Error('TTS worker 已关闭'));
+  }
+  w.jobs.clear();
+  try {
+    if (w.proc && w.proc.stdin && !w.proc.stdin.destroyed) w.proc.stdin.end();
+  } catch (_) {}
+}
+
+function ensureTtsWorker() {
+  if (ttsWorker && ttsWorker.proc && !ttsWorker.proc.killed && ttsWorker.proc.exitCode === null) {
+    return ttsWorker.readyPromise;
+  }
+  const py = findEdgeTtsPython();
+  if (!py || brokenWorkerPythons.has(py)) return Promise.resolve(null);
+
+  let proc;
+  try {
+    proc = trackChild(
+      cp.spawn(py, ['-u', '-c', TTS_WORKER_SCRIPT], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: Object.assign({}, process.env, {
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+          PYTHONUNBUFFERED: '1',
+        }),
+      })
+    );
+  } catch (_) {
+    return Promise.resolve(null);
+  }
+
+  if (proc.stdin) proc.stdin.on('error', () => {});
+
+  let resolveReady;
+  const readyPromise = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+
+  const finishStartup = (ok) => {
+    if (worker.startupTimer) {
+      clearTimeout(worker.startupTimer);
+      worker.startupTimer = null;
+    }
+    if (!resolveReady) return;
+    const r = resolveReady;
+    resolveReady = null;
+    r(ok ? worker : null);
+  };
+
+  const worker = {
+    py,
+    proc,
+    ready: false,
+    stopping: false,
+    readyPromise,
+    finishStartup,
+    jobs: new Map(),
+    seq: 0,
+    stdoutBuf: '',
+    stderrBuf: '',
+    startupTimer: null,
+  };
+  ttsWorker = worker;
+
+  const recordPreReadyFailure = () => {
+    const count = (workerPreReadyFailures.get(py) || 0) + 1;
+    workerPreReadyFailures.set(py, count);
+    if (count >= MAX_PRE_READY_FAILURES) {
+      brokenWorkerPythons.add(py);
+    }
+  };
+
+  worker.startupTimer = setTimeout(() => {
+    if (!worker.ready) {
+      if (!worker.stopping) recordPreReadyFailure();
+      worker.stopping = true;
+      if (ttsWorker === worker) ttsWorker = null;
+      killChild(proc);
+      finishStartup(false);
+    }
+  }, 15000);
+  if (worker.startupTimer.unref) worker.startupTimer.unref();
+
+  proc.stderr.on('data', (d) => {
+    worker.stderrBuf = (worker.stderrBuf + d.toString()).slice(-1000);
+  });
+
+  proc.stdout.on('data', (d) => {
+    worker.stdoutBuf += d.toString('utf8');
+    let nl;
+    while ((nl = worker.stdoutBuf.indexOf('\n')) >= 0) {
+      const line = worker.stdoutBuf.slice(0, nl).trim();
+      worker.stdoutBuf = worker.stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch (_) {
+        continue;
+      }
+      if (msg.type === 'ready') {
+        worker.ready = true;
+        workerPreReadyFailures.delete(py);
+        finishStartup(true);
+        continue;
+      }
+      const job = worker.jobs.get(msg.id);
+      if (!job) continue;
+      if (msg.type === 'chunk') {
+        if (msg.data) {
+          refreshJobTimer(job);
+          job.onChunk(Buffer.from(msg.data, 'base64'));
+        }
+      } else if (msg.type === 'end') {
+        worker.jobs.delete(msg.id);
+        if (job.timer) clearTimeout(job.timer);
+        job.onEnd();
+      } else if (msg.type === 'error') {
+        worker.jobs.delete(msg.id);
+        if (job.timer) clearTimeout(job.timer);
+        job.onError(new Error(msg.error || '语音合成失败'));
+      }
+    }
+  });
+
+  function refreshJobTimer(job) {
+    if (job.timer) clearTimeout(job.timer);
+    job.timer = setTimeout(() => {
+      worker.jobs.delete(job.id);
+      try {
+        if (!proc.killed && proc.stdin.writable) {
+          proc.stdin.write(JSON.stringify({ type: 'cancel', id: job.id }) + '\n');
+        }
+      } catch (_) {}
+      job.onError(new Error('语音合成超时'));
+    }, 30000);
+    if (job.timer.unref) job.timer.unref();
+  }
+
+  worker.refreshJobTimer = refreshJobTimer;
+
+  const onExit = (code) => {
+    if (ttsWorker === worker) ttsWorker = null;
+    if (!worker.ready) {
+      if (!worker.stopping && code !== 0) recordPreReadyFailure();
+      finishStartup(false);
+    }
+    const err = new Error(
+      'edge-tts worker 退出' + (code != null ? ' (' + code + ')' : '') +
+        (worker.stderrBuf ? '：' + worker.stderrBuf.slice(0, 200) : '')
+    );
+    for (const job of worker.jobs.values()) {
+      if (job.timer) clearTimeout(job.timer);
+      job.onError(err);
+    }
+    worker.jobs.clear();
+  };
+
+  proc.on('error', () => onExit(null));
+  proc.on('close', (code) => onExit(code));
+
+  return readyPromise;
+}
+
+function warmTtsWorker() {
+  return ensureTtsWorker().catch(() => null);
+}
+
+function dispatchWorkerJob(worker, { text, voice, rateStr }, callbacks) {
+  const id = ++worker.seq;
+  let cancelled = false;
+  const job = {
+    id,
+    timer: null,
+    onChunk: callbacks.onChunk,
+    onEnd: callbacks.onEnd,
+    onError: callbacks.onError,
+  };
+  worker.jobs.set(id, job);
+  worker.refreshJobTimer(job);
+
+  try {
+    worker.proc.stdin.write(
+      JSON.stringify({ type: 'synth', id, text, voice, rate: rateStr }) + '\n'
+    );
+  } catch (e) {
+    worker.jobs.delete(id);
+    if (job.timer) clearTimeout(job.timer);
+    throw e;
+  }
+
+  return () => {
+    if (cancelled) return;
+    cancelled = true;
+    if (worker.jobs.delete(id)) {
+      if (job.timer) clearTimeout(job.timer);
+      try {
+        if (!worker.proc.killed && worker.proc.stdin.writable) {
+          worker.proc.stdin.write(JSON.stringify({ type: 'cancel', id }) + '\n');
+        }
+      } catch (_) {}
+    }
+  };
+}
+
+function spawnCliStreamJob(exe, { text, voice, rate }, callbacks) {
+  const args = ['--voice', voice, '--text=' + text, '--write-media', '-', '--no-progress'];
+  if (rate !== 0) args.push('--rate=' + (rate > 0 ? '+' : '') + rate + '%');
+
+  const child = trackChild(
+    cp.spawn(exe, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: Object.assign({}, process.env, {
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
+        PYTHONUNBUFFERED: '1',
+      }),
+    })
+  );
+
+  let errText = '';
+  let gotAudio = false;
+  let finished = false;
+  let cancelled = false;
+
+  let timer = setTimeout(() => {
+    if (finished) return;
+    finished = true;
+    killChild(child);
+    callbacks.onError(new Error('语音合成超时'));
+  }, 30000);
+  if (timer.unref) timer.unref();
+
+  const bumpTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      killChild(child);
+      callbacks.onError(new Error('语音合成超时'));
+    }, 30000);
+    if (timer.unref) timer.unref();
+  };
+
+  child.stderr.on('data', (d) => {
+    errText = (errText + d.toString()).slice(-1000);
+  });
+
+  child.stdout.on('data', (chunk) => {
+    if (finished || cancelled || !chunk || !chunk.length) return;
+    gotAudio = true;
+    bumpTimer();
+    callbacks.onChunk(chunk);
+  });
+
+  child.on('error', (e) => {
+    if (finished || cancelled) return;
+    finished = true;
+    clearTimeout(timer);
+    callbacks.onError(e);
+  });
+
+  child.on('close', (code) => {
+    if (finished || cancelled) return;
+    finished = true;
+    clearTimeout(timer);
+    if (code !== 0) {
+      callbacks.onError(
+        new Error('edge-tts 退出码 ' + code + (errText ? '：' + errText.slice(0, 200) : ''))
+      );
+      return;
+    }
+    if (!gotAudio) {
+      callbacks.onError(new Error('没有生成音频'));
+      return;
+    }
+    callbacks.onEnd();
+  });
+
+  return () => {
+    if (cancelled || finished) return;
+    cancelled = true;
+    finished = true;
+    clearTimeout(timer);
+    killChild(child);
+  };
+}
 
 const LATIN_LANGS = new Set(['en', 'fr', 'de', 'es', 'pt', 'it', 'nl', 'pl', 'tr', 'vi', 'id']);
 
@@ -1105,87 +1928,299 @@ function pickVoice(text, voice, langHint) {
   return (info && info.voice) || config.tts.voiceEn || LANGS.en.voice;
 }
 
-/**
- * 合成一段语音，返回本地 mp3 路径。相同文字/音色/语速直接命中缓存。
- * @param {string} text
- * @param {{voice?:string, rate?:number|string}} [opts]
- */
-async function synthesizeSpeech(text, opts) {
+function parseTtsParams(text, opts) {
   const q = String(text || '').replace(/\s+/g, ' ').trim();
   if (!q) throw Object.assign(new Error('没有要朗读的文字'), { code: 'bad-request' });
   if (q.length > 1200) {
     throw Object.assign(new Error('一次最多朗读 1200 个字符'), { code: 'bad-request' });
   }
-
   const o = opts || {};
   const voice = pickVoice(q, o.voice, o.lang);
   let rate = parseInt(o.rate != null ? o.rate : config.tts.rate, 10);
   if (!Number.isFinite(rate)) rate = 0;
   rate = Math.max(-50, Math.min(100, rate));
-
+  const rateStr = (rate >= 0 ? '+' : '') + rate + '%';
   const key = crypto
     .createHash('sha1')
     .update([voice, rate, q].join('|'))
     .digest('hex')
     .slice(0, 24);
   const out = path.join(TTS_CACHE_DIR, key + '.mp3');
+  return { q, voice, rate, rateStr, key, out };
+}
+
+function createTtsStreamJob({ key, q, voice, rate, rateStr, out }) {
+  ensureTtsCacheDir();
+  const tmpPath = path.join(TTS_CACHE_DIR, key + '.' + process.pid + '.' + (++ttsTmpSeq) + '.tmp.mp3');
+
+  let resolveFile;
+  let rejectFile;
+  const filePromise = new Promise((resolve, reject) => {
+    resolveFile = resolve;
+    rejectFile = reject;
+  });
+  // 防止流式调用方不直接 await filePromise 时触发 unhandledRejection
+  filePromise.catch(() => {});
+
+  let ws = null;
+  let cacheWriteFailed = false;
+  let wsError = null;
+
+  const openTmpStream = () => {
+    if (ws || cacheWriteFailed) return;
+    try {
+      ws = fs.createWriteStream(tmpPath);
+      ws.on('error', (e) => {
+        cacheWriteFailed = true;
+        wsError = e;
+      });
+    } catch (e) {
+      cacheWriteFailed = true;
+      wsError = e;
+    }
+  };
+
+  const cleanupTmp = async () => {
+    if (ws) {
+      const stream = ws;
+      ws = null;
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(t);
+          resolve();
+        };
+        const t = setTimeout(finish, 500);
+        if (t.unref) t.unref();
+        stream.once('close', finish);
+        stream.once('error', finish);
+        try { stream.destroy(); } catch (_) { finish(); }
+      });
+    }
+    try { await fs.promises.unlink(tmpPath); } catch (_) {}
+  };
+
+  const commitTmp = async () => {
+    if (cacheWriteFailed || !ws) {
+      await cleanupTmp();
+      if (wsError) throw wsError;
+      throw new Error('缓存写入失败');
+    }
+    await new Promise((resolve, reject) => {
+      ws.once('error', reject);
+      ws.end(resolve);
+    });
+    ws = null;
+    try {
+      await fs.promises.rename(tmpPath, out);
+    } catch (_) {
+      // 某些 Windows 环境下 rename 可能报 EXDEV/EPERM，退回 copyFile
+      await fs.promises.copyFile(tmpPath, out);
+      try { await fs.promises.unlink(tmpPath); } catch (_) {}
+    }
+    return out;
+  };
+
+  const job = {
+    key,
+    voice,
+    rate,
+    chunks: [],
+    totalBytes: 0,
+    done: false,
+    error: null,
+    cancelled: false,
+    subscribers: new Set(),
+    waiters: 0,
+    cancelUpstream: null,
+    filePromise,
+  };
+
+  const failJob = (err) => {
+    if (job.cancelled || job.done || job.error) return;
+    job.error = err;
+    ttsPending.delete(key);
+    cleanupTmp();
+    for (const sub of Array.from(job.subscribers)) {
+      try { sub.onError(err); } catch (_) {}
+    }
+    job.subscribers.clear();
+    rejectFile(err);
+  };
+
+  const callbacks = {
+    onChunk: (buf) => {
+      if (job.cancelled || job.done || job.error || !buf || !buf.length) return;
+      job.chunks.push(buf);
+      job.totalBytes += buf.length;
+      openTmpStream();
+      if (ws && !cacheWriteFailed) {
+        try { ws.write(buf); } catch (_) { cacheWriteFailed = true; }
+      }
+      for (const sub of Array.from(job.subscribers)) {
+        try { sub.onChunk(buf); } catch (_) {}
+      }
+    },
+    onEnd: () => {
+      if (job.cancelled || job.done || job.error) return;
+      if (job.totalBytes <= 0) {
+        failJob(new Error('没有生成音频'));
+        return;
+      }
+      job.done = true;
+      for (const sub of Array.from(job.subscribers)) {
+        try { sub.onEnd(); } catch (_) {}
+      }
+      job.subscribers.clear();
+      if (job.totalBytes > 100) {
+        commitTmp()
+          .then((savedPath) => {
+            ttsPending.delete(key);
+            resolveFile(savedPath);
+          })
+          .catch((e) => {
+            ttsPending.delete(key);
+            cleanupTmp();
+            rejectFile(e);
+          });
+      } else {
+        ttsPending.delete(key);
+        cleanupTmp();
+        rejectFile(new Error('音频过短'));
+      }
+    },
+    onError: failJob,
+  };
+
+  job.subscribe = (handlers) => {
+    const h = handlers || {};
+    const sub = {
+      onChunk: typeof h.onChunk === 'function' ? h.onChunk : () => {},
+      onEnd: typeof h.onEnd === 'function' ? h.onEnd : () => {},
+      onError: typeof h.onError === 'function' ? h.onError : () => {},
+    };
+    for (const c of job.chunks) sub.onChunk(c);
+    if (job.done) {
+      sub.onEnd();
+      return () => {};
+    }
+    if (job.error) {
+      sub.onError(job.error);
+      return () => {};
+    }
+    job.subscribers.add(sub);
+    return () => {
+      job.subscribers.delete(sub);
+      if (
+        job.subscribers.size === 0 &&
+        job.waiters === 0 &&
+        !job.done &&
+        !job.error &&
+        !job.cancelled
+      ) {
+        job.cancelled = true;
+        ttsPending.delete(key);
+        if (job.cancelUpstream) {
+          try { job.cancelUpstream(); } catch (_) {}
+        }
+        cleanupTmp();
+        rejectFile(Object.assign(new Error('已取消'), { code: 'cancelled' }));
+      }
+    };
+  };
+
+  // 启动上游合成：优先复用常驻 Python worker，不可用时自动退回 CLI 流式输出
+  ensureTtsWorker()
+    .then((worker) => {
+      if (job.cancelled || job.done || job.error) return;
+      if (worker) {
+        try {
+          job.cancelUpstream = dispatchWorkerJob(worker, { text: q, voice, rateStr }, callbacks);
+          return;
+        } catch (_) {
+          /* worker stdin 不可写时落到 CLI 兜底 */
+        }
+      }
+      const exe = findEdgeTts();
+      if (!exe) {
+        failJob(Object.assign(new Error('语音引擎尚未安装'), { code: 'tts-missing' }));
+        return;
+      }
+      job.cancelUpstream = spawnCliStreamJob(exe, { text: q, voice, rate }, callbacks);
+    })
+    .catch((e) => failJob(e));
+
+  return job;
+}
+
+/**
+ * 流式语音合成：缓存命中时直接返回文件路径；未命中时返回可订阅的实时流，并在后台落盘缓存。
+ */
+async function streamSpeech(text, opts) {
+  const { q, voice, rate, rateStr, key, out } = parseTtsParams(text, opts);
   try {
-    if (fs.statSync(out).size > 100) return out;
+    const st = await fs.promises.stat(out);
+    if (st.isFile() && st.size > 100) {
+      return { hit: true, file: out, voice, rate, key };
+    }
   } catch (_) {
     /* 还没缓存 */
   }
-  if (ttsPending.has(key)) return ttsPending.get(key);
 
-  const exe = findEdgeTts();
-  if (!exe) throw Object.assign(new Error('语音引擎尚未安装'), { code: 'tts-missing' });
+  let job = ttsPending.get(key);
+  if (!job) {
+    const exe = findEdgeTts();
+    const py = findEdgeTtsPython();
+    if (!exe && !py) {
+      throw Object.assign(new Error('语音引擎尚未安装'), { code: 'tts-missing' });
+    }
+    job = createTtsStreamJob({ key, q, voice, rate, rateStr, out });
+    ttsPending.set(key, job);
+  }
 
-  ensureDir(TTS_CACHE_DIR);
-  const tmp = path.join(TTS_CACHE_DIR, key + '.' + process.pid + '.tmp.mp3');
+  return {
+    hit: false,
+    voice,
+    rate,
+    key,
+    subscribe: (handlers) => job.subscribe(handlers),
+    filePromise: job.filePromise,
+  };
+}
 
-  const job = new Promise((resolve, reject) => {
-    const args = ['--voice', voice, '--text', q, '--write-media', tmp];
-    if (rate !== 0) args.push('--rate=' + (rate > 0 ? '+' : '') + rate + '%');
+/**
+ * 合成一段语音，返回本地 mp3 路径。相同文字/音色/语速直接命中缓存。
+ * @param {string} text
+ * @param {{voice?:string, rate?:number|string}} [opts]
+ */
+async function synthesizeSpeech(text, opts) {
+  const { q, voice, rate, rateStr, key, out } = parseTtsParams(text, opts);
+  try {
+    const st = await fs.promises.stat(out);
+    if (st.isFile() && st.size > 100) return out;
+  } catch (_) {
+    /* 还没缓存 */
+  }
 
-    const child = trackChild(cp.spawn(exe, args, {
-      windowsHide: true,
-      env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }),
-    }));
-    let errText = '';
-    child.stderr.on('data', (d) => {
-      errText += d.toString();
-    });
+  let job = ttsPending.get(key);
+  if (!job) {
+    const exe = findEdgeTts();
+    const py = findEdgeTtsPython();
+    if (!exe && !py) {
+      throw Object.assign(new Error('语音引擎尚未安装'), { code: 'tts-missing' });
+    }
+    job = createTtsStreamJob({ key, q, voice, rate, rateStr, out });
+    ttsPending.set(key, job);
+  }
 
-    const timer = setTimeout(() => {
-      killChild(child);
-      reject(new Error('语音合成超时'));
-    }, 30000);
-    if (timer.unref) timer.unref();
-
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      try {
-        if (code !== 0) {
-          throw new Error('edge-tts 退出码 ' + code + (errText ? '：' + errText.slice(0, 200) : ''));
-        }
-        const st = fs.statSync(tmp);
-        if (!st.size) throw new Error('没有生成音频');
-        // 某些 Windows 环境下 rename 同目录也会报 EXDEV，用复制更稳
-        fs.copyFileSync(tmp, out);
-        try { fs.unlinkSync(tmp); } catch (_) {}
-        resolve(out);
-      } catch (e) {
-        try { fs.unlinkSync(tmp); } catch (_) {}
-        reject(e);
-      }
-    });
-  }).finally(() => ttsPending.delete(key));
-
-  ttsPending.set(key, job);
-  return job;
+  job.waiters++;
+  try {
+    return await job.filePromise;
+  } finally {
+    job.waiters--;
+  }
 }
 
 /** 用 pdf2zh 自带的 PyMuPDF 抽出 PDF 每页文字，供朗读使用 */
@@ -1272,11 +2307,14 @@ function heuristicLang(text) {
   return bestCount >= 2 ? best : 'en';
 }
 
-async function googleDetect(text) {
+async function googleDetect(text, opts) {
+  const o = opts || {};
   const q = encodeURIComponent(String(text || '').slice(0, 1200));
   const url =
     'https://translate.google.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=' + q;
-  const body = await requestRetry(url, { timeout: 10000 }, 1);
+  const timeout = Number.isFinite(o.timeout) ? o.timeout : 10000;
+  const retries = Number.isFinite(o.retries) ? o.retries : 1;
+  const body = await requestRetry(url, { timeout }, retries);
   const data = JSON.parse(body);
   const code = Array.isArray(data) ? data[2] : '';
   return typeof code === 'string' ? code : '';
@@ -1286,25 +2324,28 @@ async function googleDetect(text) {
  * 判断一段文字的语言，返回 BCP-47 风格代码（zh / ja / fr …）。
  * 先看文字脚本，再用 Google 检测，最后用常见词兜底。
  */
-async function detectLanguage(text) {
+async function detectLanguage(text, opts) {
+  const o = opts || {};
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (!s) return { lang: '', source: 'none' };
 
   const script = detectScriptLang(s);
   if (script) return { lang: script, source: 'script' };
 
-  try {
-    const g = await googleDetect(s);
-    const full = String(g || '').replace('_', '-');
-    // 以前只认 LANGS 里的精确代码，Google 返回 zh-CN 时会掉到启发式并被误判成 en。
-    // 现在按「精确代码 → 基础代码 → 原样保留」的顺序映射，未收录的语言也不会冒充英语。
-    if (/^[a-z]{2,3}(-[A-Za-z]{2,8})?$/i.test(full)) {
-      const b = baseLang(full);
-      const lang = LANGS[full] ? full : LANGS[b] ? b : full;
-      return { lang: lang, source: 'google' };
+  if (!o.localOnly) {
+    try {
+      const g = await googleDetect(s, o);
+      const full = String(g || '').replace('_', '-');
+      // 以前只认 LANGS 里的精确代码，Google 返回 zh-CN 时会掉到启发式并被误判成 en。
+      // 现在按「精确代码 → 基础代码 → 原样保留」的顺序映射，未收录的语言也不会冒充英语。
+      if (/^[a-z]{2,3}(-[A-Za-z]{2,8})?$/i.test(full)) {
+        const b = baseLang(full);
+        const lang = LANGS[full] ? full : LANGS[b] ? b : full;
+        return { lang: lang, source: 'google' };
+      }
+    } catch (_) {
+      /* 网络不可用时走本地判断 */
     }
-  } catch (_) {
-    /* 网络不可用时走本地判断 */
   }
 
   return { lang: heuristicLang(s) || 'en', source: 'heuristic' };
@@ -1314,7 +2355,7 @@ async function detectPdfLanguage(file) {
   try {
     const pages = await extractPdfText(file);
     const text = pages.slice(0, 3).join(' ').slice(0, 4000);
-    const d = await detectLanguage(text);
+    const d = await detectLanguage(text, { localOnly: true });
     return d.lang || 'en';
   } catch (_) {
     return 'en';
@@ -1344,10 +2385,15 @@ function trackChild(child) {
 
 /** Windows 下 pdf2zh 可能再拉起子进程，用 taskkill /T 杀整棵进程树 */
 function killChild(child) {
-  if (!child) return;
+  if (!child || child.exitCode !== null) return;
   try {
     if (process.platform === 'win32' && child.pid) {
-      cp.spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      const tk = cp.spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+        detached: false,
+      });
+      if (tk && tk.unref) tk.unref();
       return;
     }
   } catch (_) {
@@ -1361,6 +2407,7 @@ function killChild(child) {
 }
 
 function killAllChildren() {
+  resetTtsWorker();
   for (const c of Array.from(activeChildren)) killChild(c);
   activeChildren.clear();
 }
@@ -1906,11 +2953,15 @@ function startInstall() {
 
   function finish() {
     clearTimeout(timer);
+    invalidateToolCache();
+    brokenWorkerPythons.clear();
+    workerPreReadyFailures.clear();
     const engine = engineInfo();
     if (engine.available) {
       job.status = 'done';
       job.progress = 100;
       job.log.push('安装完成：' + engine.path);
+      if (engine.tts && engine.tts.available) warmTtsWorker();
     } else {
       job.status = 'error';
       job.error = '安装结束，但仍未找到 pdf2zh\n' + job.log.slice(-8).join('\n');
@@ -1921,6 +2972,7 @@ function startInstall() {
 
   function fail(msg) {
     clearTimeout(timer);
+    invalidateToolCache();
     job.status = 'error';
     job.error = msg + '\n' + job.log.slice(-8).join('\n');
     job.endedAt = Date.now();
@@ -1967,12 +3019,15 @@ function startInstall() {
 module.exports = {
   APP_DIR,
   PDF_CACHE_DIR,
+  TTS_CACHE_DIR,
   publicConfig,
   updateConfig,
   status,
   translateTexts,
   dictLookup,
   synthesizeSpeech,
+  streamSpeech,
+  warmTtsWorker,
   pickVoice,
   extractPdfText,
   detectLanguage,
@@ -1987,4 +3042,9 @@ module.exports = {
   getJob,
   startInstall,
   engineInfo,
+  findUv,
+  findPdf2zh,
+  findEdgeTts,
+  findEdgeTtsPython,
+  invalidateToolCache,
 };

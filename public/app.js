@@ -2532,14 +2532,26 @@
     }
   }
 
+  let translateStatusPromise = null;
+  function loadTranslateStatus() {
+    if (!translateStatusPromise) {
+      translateStatusPromise = api('/api/translate/status')
+        .then((s) => {
+          if (s && s.config) {
+            transCfg = s.config;
+            if (s.config.tts) ttsCfg = s.config.tts;
+          }
+          return s;
+        })
+        .catch(() => null);
+    }
+    return translateStatusPromise;
+  }
+
   function initTranslate() {
     document.body.classList.add('trans-off');
     fillLangSelects();
-    api('/api/translate/status')
-      .then((s) => {
-        if (s && s.config) transCfg = s.config;
-      })
-      .catch(() => {});
+    loadTranslateStatus();
 
     $('#btn-bilingual').addEventListener('click', () => {
       if (!state.translatable) {
@@ -2797,8 +2809,27 @@
     audioBaseRate: 1, // 当前音频是按哪个速度合成的
     utterance: null,
     seq: 0,
-    rate: 1
+    rate: 1,
+    lastMetric: null
   };
+
+  let activeSpeechSettler = null;
+  let prefetchAbort = null;
+  let ttsLoadToken = 0;
+  let sharedAudioCtx = null;
+
+  function getSharedAudioCtx() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx || typeof fetch !== 'function' || typeof ReadableStream === 'undefined') return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') {
+      try {
+        sharedAudioCtx = new Ctx();
+      } catch (_) {
+        return null;
+      }
+    }
+    return sharedAudioCtx;
+  }
 
   // PDF 朗读每次都会重新抽取全文；长 PDF 首句要等很久。按路径缓存 30 分钟。
   const pdfTextCache = new Map();
@@ -2806,6 +2837,165 @@
 
   function ttsClean(s) {
     return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** 把单句拆成不超过 maxLen 的片段：先按子句标点，再按空格/字符硬切 */
+  function splitLongPiece(text, maxLen) {
+    const s = ttsClean(text);
+    if (!s) return [];
+    if (s.length <= maxLen) return [s];
+
+    const clauseParts = s
+      .split(/([,;，；：:、—]+\s*)/)
+      .reduce((acc, part, idx) => {
+        if (idx % 2 === 0) {
+          if (part) acc.push(part);
+        } else if (acc.length) {
+          acc[acc.length - 1] += part;
+        } else {
+          acc.push(part);
+        }
+        return acc;
+      }, [])
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    const pieces = [];
+    const pushSplitWords = (seg) => {
+      let rest = seg.trim();
+      while (rest.length > maxLen) {
+        let cut = -1;
+        const minCut = Math.floor(maxLen * 0.4);
+        for (let i = maxLen; i >= minCut; i--) {
+          if (/\s/.test(rest[i])) {
+            cut = i;
+            break;
+          }
+        }
+        if (cut <= 0) cut = maxLen;
+        if (cut > 1 && cut < rest.length) {
+          const prevCode = rest.charCodeAt(cut - 1);
+          const nextCode = rest.charCodeAt(cut);
+          if (prevCode >= 0xd800 && prevCode <= 0xdbff && nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+            cut -= 1;
+          }
+        }
+        if (cut === 1 && rest.length >= 2) {
+          const c0 = rest.charCodeAt(0);
+          const c1 = rest.charCodeAt(1);
+          if (c0 >= 0xd800 && c0 <= 0xdbff && c1 >= 0xdc00 && c1 <= 0xdfff) {
+            cut = 2;
+          }
+        }
+        const head = rest.slice(0, cut).trim();
+        if (head) pieces.push(head);
+        rest = rest.slice(cut).trim();
+      }
+      if (rest) pieces.push(rest);
+    };
+
+    let buf = '';
+    const joinSep = (a, b) =>
+      /[A-Za-z0-9,;:\-]$/.test(a) && /^[A-Za-z0-9"'(\[]/.test(b) ? ' ' : '';
+    for (const cp of clauseParts) {
+      if (cp.length > maxLen) {
+        if (buf) {
+          pieces.push(buf);
+          buf = '';
+        }
+        pushSplitWords(cp);
+        continue;
+      }
+      if (!buf) {
+        buf = cp;
+      } else {
+        const sep = joinSep(buf, cp);
+        if (buf.length + sep.length + cp.length <= maxLen) {
+          buf += sep + cp;
+        } else {
+          pieces.push(buf);
+          buf = cp;
+        }
+      }
+    }
+    if (buf) pieces.push(buf);
+    return pieces;
+  }
+
+  /**
+   * 段落朗读分块：首块控制得更短（<= firstMax）以快速出声，
+   * 后续块按句子打包（<= restMax <= 1000），避免超 1200 字触发 HTTP 400。
+   */
+  function splitTtsChunks(raw, firstMax, restMax) {
+    const q = ttsClean(raw);
+    if (!q) return [];
+    const fMax = Math.max(40, Math.min(1000, firstMax || 160));
+    const rMax = Math.max(80, Math.min(1000, restMax || 800));
+
+    const sents = splitSentences(q).map((s) => ttsClean(s.text)).filter(Boolean);
+    if (!sents.length) {
+      const first = splitLongPiece(q, fMax);
+      if (first.length <= 1) return first;
+      return [first[0]].concat(splitLongPiece(first.slice(1).join(' '), rMax));
+    }
+
+    if (sents.length > 1 && sents[0].length < 25 && sents[0].length + 1 + sents[1].length <= fMax) {
+      sents.splice(0, 2, sents[0] + ' ' + sents[1]);
+    }
+
+    const firstPieces = splitLongPiece(sents[0], fMax);
+    const chunks = [firstPieces[0]];
+    const tailQueue = firstPieces.slice(1).concat(sents.slice(1));
+
+    const flat = [];
+    tailQueue.forEach((p) => {
+      splitLongPiece(p, rMax).forEach((sub) => flat.push(sub));
+    });
+
+    const joinSep = (a, b) =>
+      /[A-Za-z0-9.,!?;:'")\]\-]$/.test(a) && /^[A-Za-z0-9"'(\[]/.test(b) ? ' ' : '';
+    let cur = '';
+    for (const part of flat) {
+      if (!cur) {
+        cur = part;
+        continue;
+      }
+      const sep = joinSep(cur, part);
+      if (cur.length + sep.length + part.length <= rMax) {
+        cur += sep + part;
+      } else {
+        chunks.push(cur);
+        cur = part;
+      }
+    }
+    if (cur) chunks.push(cur);
+    return chunks;
+  }
+
+  function prefetchTtsUrl(text) {
+    const q = ttsClean(text);
+    if (!q || q.length > 1200) return;
+    if (prefetchAbort) {
+      try { prefetchAbort.abort(); } catch (_) {}
+      prefetchAbort = null;
+    }
+    try {
+      const u = buildUrl('/api/tts', {
+        text: q,
+        voice: ttsVoiceFor(q),
+        rate: ttsRatePercent(),
+        lang: state.docLang || ''
+      }).toString();
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      prefetchAbort = ctrl;
+      fetch(u, ctrl ? { signal: ctrl.signal } : undefined)
+        .catch(() => {})
+        .finally(() => {
+          if (prefetchAbort === ctrl) prefetchAbort = null;
+        });
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   function ttsVoiceFor(text) {
@@ -2856,6 +3046,15 @@
 
   function stopPlayback() {
     tts.seq++;
+    if (activeSpeechSettler) {
+      const settle = activeSpeechSettler;
+      activeSpeechSettler = null;
+      settle('cancelled');
+    }
+    if (prefetchAbort) {
+      try { prefetchAbort.abort(); } catch (_) {}
+      prefetchAbort = null;
+    }
     if (tts.audio) {
       try {
         tts.audio.pause();
@@ -2915,6 +3114,9 @@
           resolve({ how: how });
         }
       };
+      u.onstart = () => {
+        if (opts && typeof opts.onStart === 'function') opts.onStart('speech');
+      };
       u.onend = () => done('speech');
       u.onerror = () => done('none');
       try {
@@ -2925,20 +3127,432 @@
     });
   }
 
+  const MPEG1_BR = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+  const MPEG2_BR = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0];
+  const MPEG1_SR = [44100, 48000, 32000, 0];
+  const MPEG2_SR = [22050, 24000, 16000, 0];
+  const MPEG25_SR = [11025, 12000, 8000, 0];
+
+  function mp3FrameInfo(bytes, pos) {
+    if (pos + 4 > bytes.length) return null;
+    if (bytes[pos] !== 0xff || (bytes[pos + 1] & 0xe0) !== 0xe0) return null;
+    const ver = (bytes[pos + 1] >> 3) & 0x03;
+    const layer = (bytes[pos + 1] >> 1) & 0x03;
+    if (ver === 1 || layer !== 1) return null;
+    const brIdx = (bytes[pos + 2] >> 4) & 0x0f;
+    const srIdx = (bytes[pos + 2] >> 2) & 0x03;
+    const pad = (bytes[pos + 2] >> 1) & 0x01;
+    if (brIdx === 0 || brIdx === 15 || srIdx === 3) return null;
+    const bitrate = (ver === 3 ? MPEG1_BR[brIdx] : MPEG2_BR[brIdx]) * 1000;
+    const sr = ver === 3 ? MPEG1_SR[srIdx] : ver === 2 ? MPEG2_SR[srIdx] : MPEG25_SR[srIdx];
+    if (!bitrate || !sr) return null;
+    const coef = ver === 3 ? 144 : 72;
+    const samples = ver === 3 ? 1152 : 576;
+    const size = Math.floor((coef * bitrate) / sr) + pad;
+    if (size < 4) return null;
+    return { size: size, durationSec: samples / sr };
+  }
+
+  function extractMp3Frames(bytes, isFinal, checkId3) {
+    let pos = 0;
+    if (
+      checkId3 &&
+      bytes.length >= 10 &&
+      bytes[0] === 0x49 &&
+      bytes[1] === 0x44 &&
+      bytes[2] === 0x33
+    ) {
+      const tagSize =
+        ((bytes[6] & 0x7f) << 21) |
+        ((bytes[7] & 0x7f) << 14) |
+        ((bytes[8] & 0x7f) << 7) |
+        (bytes[9] & 0x7f);
+      pos = 10 + tagSize;
+      if (pos > bytes.length) return { frames: [], consumedEnd: 0, skippedId3: false };
+    }
+    const startAfterId3 = pos;
+    const frames = [];
+    while (pos + 4 <= bytes.length) {
+      const info = mp3FrameInfo(bytes, pos);
+      if (!info) {
+        pos++;
+        continue;
+      }
+      const end = pos + info.size;
+      if (end > bytes.length) break;
+      if (!isFinal) {
+        if (end + 4 > bytes.length) break;
+        if (!mp3FrameInfo(bytes, end)) {
+          pos++;
+          continue;
+        }
+      }
+      frames.push({ start: pos, end: end, durationSec: info.durationSec });
+      pos = end;
+    }
+    return { frames: frames, consumedEnd: pos, skippedId3: checkId3 && startAfterId3 > 0 };
+  }
+
+  function appendUint8(a, b) {
+    if (!a || !a.length) return b;
+    if (!b || !b.length) return a;
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a, 0);
+    out.set(b, a.length);
+    return out;
+  }
+
+  function createWebAudioTtsPlayer(ctx, url, handlers) {
+    const abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let stopped = false;
+    let paused = false;
+    let startedPlaying = false;
+    let streamDone = false;
+    let decodingCount = 0;
+    let hasDecodedAny = false;
+    let currentRate = 1;
+    let nextStartTime = 0;
+    const scheduled = [];
+    const pendingSegments = [];
+    let activeError = null;
+    let decodeChain = Promise.resolve();
+
+    const cleanupSources = () => {
+      while (scheduled.length) {
+        const it = scheduled.pop();
+        try { it.src.onended = null; } catch (_) {}
+        try { it.src.stop(); } catch (_) {}
+        try { it.src.disconnect(); } catch (_) {}
+      }
+      pendingSegments.length = 0;
+    };
+
+    const checkFinished = () => {
+      if (
+        !stopped &&
+        !paused &&
+        streamDone &&
+        decodingCount === 0 &&
+        pendingSegments.length === 0 &&
+        scheduled.length === 0 &&
+        hasDecodedAny
+      ) {
+        stopped = true;
+        if (handlers.onEnded) handlers.onEnded();
+      }
+    };
+
+    const scheduleSegment = async (seg) => {
+      if (stopped) return;
+      if (paused) {
+        pendingSegments.push(seg);
+        return;
+      }
+      if (ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch (_) {}
+      }
+      if (stopped || paused) {
+        if (!stopped && paused) pendingSegments.push(seg);
+        return;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = seg.buffer;
+      src.playbackRate.value = currentRate;
+      src.connect(ctx.destination);
+      const now = ctx.currentTime;
+      const when = Math.max(now + 0.005, nextStartTime);
+      nextStartTime = when + seg.playDurSec / currentRate;
+      const entry = {
+        src: src,
+        when: when,
+        rateChangedAt: when,
+        playedBuf: 0,
+        offset: seg.skipSec,
+        dur: seg.playDurSec,
+        buffer: seg.buffer,
+        rate: currentRate
+      };
+      scheduled.push(entry);
+      src.onended = () => {
+        const idx = scheduled.indexOf(entry);
+        if (idx >= 0) scheduled.splice(idx, 1);
+        checkFinished();
+      };
+      try {
+        src.start(when, seg.skipSec, seg.playDurSec);
+      } catch (e) {
+        const idx = scheduled.indexOf(entry);
+        if (idx >= 0) scheduled.splice(idx, 1);
+        if (!startedPlaying && !stopped) {
+          activeError = e;
+          stopped = true;
+          cleanupSources();
+          if (handlers.onFallback) handlers.onFallback(e);
+        }
+        return;
+      }
+      if (!startedPlaying) {
+        startedPlaying = true;
+        if (handlers.onPlaying) handlers.onPlaying();
+      }
+    };
+
+    const flushPending = async () => {
+      while (pendingSegments.length && !stopped && !paused) {
+        await scheduleSegment(pendingSegments.shift());
+      }
+      checkFinished();
+    };
+
+    const enqueueDecode = (decodeInput, skipSec) => {
+      decodingCount++;
+      decodeChain = decodeChain.then(async () => {
+        if (stopped) return;
+        try {
+          const ab = decodeInput.buffer.slice(
+            decodeInput.byteOffset,
+            decodeInput.byteOffset + decodeInput.byteLength
+          );
+          const audioBuf = await ctx.decodeAudioData(ab);
+          if (stopped) return;
+          const playDurSec = Math.max(0, audioBuf.duration - skipSec);
+          if (playDurSec > 0) {
+            hasDecodedAny = true;
+            await scheduleSegment({ buffer: audioBuf, skipSec: skipSec, playDurSec: playDurSec });
+          }
+        } catch (e) {
+          if (!stopped && !startedPlaying) {
+            activeError = e;
+            stopped = true;
+            if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
+            cleanupSources();
+            if (handlers.onFallback) handlers.onFallback(e);
+          }
+        } finally {
+          decodingCount--;
+          checkFinished();
+        }
+      });
+    };
+
+    const applyRate = (newRate) => {
+      const clamped = Math.min(4, Math.max(0.25, Number(newRate) || 1));
+      if (clamped === currentRate) return;
+      currentRate = clamped;
+      if (stopped || !scheduled.length) return;
+      const now = ctx.currentTime;
+      const future = [];
+      let cursor = now + 0.005;
+      for (let i = 0; i < scheduled.length; i++) {
+        const it = scheduled[i];
+        if (it.when <= now) {
+          if (now > it.rateChangedAt) {
+            it.playedBuf += (now - it.rateChangedAt) * it.rate;
+            it.rateChangedAt = now;
+          }
+          const remBuf = Math.max(0, it.dur - it.playedBuf);
+          try { it.src.playbackRate.value = clamped; } catch (_) {}
+          it.rate = clamped;
+          cursor = Math.max(cursor, now + remBuf / clamped);
+        } else {
+          future.push(it);
+        }
+      }
+      for (const it of future) {
+        const idx = scheduled.indexOf(it);
+        if (idx >= 0) scheduled.splice(idx, 1);
+        try { it.src.onended = null; } catch (_) {}
+        try { it.src.stop(); } catch (_) {}
+        try { it.src.disconnect(); } catch (_) {}
+      }
+      nextStartTime = cursor;
+      for (const it of future) {
+        const src = ctx.createBufferSource();
+        src.buffer = it.buffer;
+        src.playbackRate.value = clamped;
+        src.connect(ctx.destination);
+        const when = nextStartTime;
+        nextStartTime = when + it.dur / clamped;
+        const entry = {
+          src: src,
+          when: when,
+          rateChangedAt: when,
+          playedBuf: 0,
+          offset: it.offset,
+          dur: it.dur,
+          buffer: it.buffer,
+          rate: clamped
+        };
+        scheduled.push(entry);
+        src.onended = () => {
+          const ix = scheduled.indexOf(entry);
+          if (ix >= 0) scheduled.splice(ix, 1);
+          checkFinished();
+        };
+        try {
+          src.start(when, entry.offset, entry.dur);
+        } catch (_) {
+          const ix = scheduled.indexOf(entry);
+          if (ix >= 0) scheduled.splice(ix, 1);
+        }
+      }
+    };
+
+    const player = {
+      src: url,
+      currentSrc: url,
+      get paused() { return paused; },
+      get error() { return activeError; },
+      get playbackRate() { return currentRate; },
+      set playbackRate(v) { applyRate(v); },
+      play: async () => {
+        if (stopped) return;
+        paused = false;
+        if (ctx.state === 'suspended') {
+          try { await ctx.resume(); } catch (_) {}
+        }
+        await flushPending();
+      },
+      pause: () => {
+        if (stopped) return;
+        paused = true;
+        if (ctx.state === 'running') {
+          try { ctx.suspend(); } catch (_) {}
+        }
+      },
+      removeAttribute: (attr) => {
+        if (attr === 'src') {
+          stopped = true;
+          paused = true;
+          if (abortCtrl) { try { abortCtrl.abort(); } catch (_) {} }
+          cleanupSources();
+          if (ctx.state === 'suspended') {
+            try { ctx.resume(); } catch (_) {}
+          }
+        }
+      },
+      load: () => {}
+    };
+
+    (async () => {
+      let resp;
+      try {
+        resp = await fetch(url, abortCtrl ? { signal: abortCtrl.signal } : undefined);
+      } catch (e) {
+        if (stopped || (e && e.name === 'AbortError')) return;
+        activeError = e;
+        stopped = true;
+        if (handlers.onFallback) handlers.onFallback(e);
+        return;
+      }
+      if (stopped) return;
+      if (!resp.ok || !resp.body) {
+        const err = new Error('HTTP ' + resp.status);
+        activeError = err;
+        stopped = true;
+        if (handlers.onFatal) handlers.onFatal(err);
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      let pending = new Uint8Array(0);
+      let overlapBytes = new Uint8Array(0);
+      let overlapSec = 0;
+      let firstBatch = true;
+      let checkId3 = true;
+
+      try {
+        while (!stopped) {
+          const step = await reader.read();
+          if (step.done) break;
+          if (!step.value || !step.value.byteLength) continue;
+          pending = appendUint8(pending, step.value);
+          const parsed = extractMp3Frames(pending, false, checkId3);
+          if (parsed.skippedId3) checkId3 = false;
+          const minFrames = firstBatch ? 6 : 16;
+          if (parsed.frames.length >= minFrames) {
+            const firstStart = parsed.frames[0].start;
+            const newSlice = pending.slice(firstStart, parsed.consumedEnd);
+            const tailCount = Math.min(2, parsed.frames.length);
+            const tailStart = parsed.frames[parsed.frames.length - tailCount].start;
+            const nextOverlap = pending.slice(tailStart, parsed.consumedEnd);
+            let nextOverlapSec = 0;
+            for (let i = parsed.frames.length - tailCount; i < parsed.frames.length; i++) {
+              nextOverlapSec += parsed.frames[i].durationSec;
+            }
+            pending = pending.slice(parsed.consumedEnd);
+            checkId3 = false;
+            const decodeInput = appendUint8(overlapBytes, newSlice);
+            const skipSec = overlapSec;
+            overlapBytes = nextOverlap;
+            overlapSec = nextOverlapSec;
+            firstBatch = false;
+            enqueueDecode(decodeInput, skipSec);
+          }
+        }
+      } catch (e) {
+        if (stopped || (e && e.name === 'AbortError')) return;
+        activeError = e;
+        stopped = true;
+        cleanupSources();
+        if (!startedPlaying && handlers.onFallback) handlers.onFallback(e);
+        else if (handlers.onFatal) handlers.onFatal(e);
+        return;
+      }
+
+      if (stopped) return;
+      if (pending.length) {
+        const parsed = extractMp3Frames(pending, true, checkId3);
+        if (parsed.frames.length) {
+          const newSlice = pending.slice(parsed.frames[0].start, parsed.consumedEnd);
+          const decodeInput = appendUint8(overlapBytes, newSlice);
+          enqueueDecode(decodeInput, overlapSec);
+        } else if (!hasDecodedAny) {
+          enqueueDecode(pending, 0);
+        }
+      }
+      streamDone = true;
+      await decodeChain;
+      if (!stopped && !hasDecodedAny) {
+        const err = new Error('Empty decoded audio');
+        activeError = err;
+        stopped = true;
+        if (handlers.onFallback) handlers.onFallback(err);
+        return;
+      }
+      checkFinished();
+    })();
+
+    return player;
+  }
+
   /** 优先用 Edge 神经语音；失败时退回浏览器自带语音 */
   function playSpeech(text, opts) {
     const o = opts || {};
     const seq = o.seq;
     const voice = o.voice || ttsVoiceFor(text);
     const rate = o.rate != null ? o.rate : ttsRatePercent();
+    const onStart = typeof o.onStart === 'function' ? o.onStart : null;
     return new Promise((resolve) => {
       let settled = false;
+      let started = false;
       const done = (how) => {
         if (!settled) {
           settled = true;
+          if (activeSpeechSettler === done) activeSpeechSettler = null;
           resolve({ how: how });
         }
       };
+      activeSpeechSettler = done;
+
+      const fireStart = (how) => {
+        if (started || settled || seq !== tts.seq || tts.paused) return;
+        started = true;
+        if (onStart) {
+          try { onStart(how); } catch (_) {}
+        }
+      };
+
       // audio.onerror 和 play().catch 可能同时触发：必须只回退一次，
       // 否则两个 SpeechSynthesisUtterance 会同时朗读同一句。
       let fallbackStarted = false;
@@ -2951,7 +3565,7 @@
         }
         // 音频接口失败后不要继续拿这个 Audio 当播放器
         tts.audio = null;
-        speakWithBrowser(text, { rateMultiplier: tts.rate }).then((r) => done(r.how));
+        speakWithBrowser(text, { rateMultiplier: tts.rate, onStart: fireStart }).then((r) => done(r.how));
       };
 
       let url;
@@ -2967,18 +3581,68 @@
         return;
       }
 
-      const audio = new Audio(url);
-      tts.audio = audio;
-      tts.audioBaseRate = tts.rate; // 后面调速时用它换算附加倍速
-      audio.onended = () => done('audio');
-      audio.onerror = () => {
-        if (seq === tts.seq) fallback();
-        else done('cancelled');
+      const startHtmlAudio = () => {
+        if (settled || seq !== tts.seq) {
+          done('cancelled');
+          return;
+        }
+        const audio = new Audio(url);
+        audio.preload = 'auto';
+        tts.audio = audio;
+        tts.audioBaseRate = tts.rate; // 后面调速时用它换算附加倍速
+        audio.onplaying = () => fireStart('audio');
+        audio.onended = () => done('audio');
+        audio.onerror = () => {
+          if (seq !== tts.seq) {
+            done('cancelled');
+            return;
+          }
+          if (tts.paused) return;
+          fallback();
+        };
+        audio.play().catch(() => {
+          if (seq !== tts.seq) {
+            done('cancelled');
+            return;
+          }
+          if (tts.paused) {
+            return;
+          }
+          fallback();
+        });
       };
-      audio.play().catch(() => {
-        if (seq === tts.seq) fallback();
-        else done('cancelled');
-      });
+
+      const ctx = getSharedAudioCtx();
+      if (ctx) {
+        tts.audioBaseRate = tts.rate;
+        tts.audio = createWebAudioTtsPlayer(ctx, url, {
+          onPlaying: () => fireStart('audio'),
+          onEnded: () => done('audio'),
+          onFallback: () => {
+            if (seq !== tts.seq) {
+              done('cancelled');
+              return;
+            }
+            if (tts.paused) return;
+            if (started) {
+              fallback();
+              return;
+            }
+            startHtmlAudio();
+          },
+          onFatal: () => {
+            if (seq !== tts.seq) {
+              done('cancelled');
+              return;
+            }
+            if (tts.paused) return;
+            fallback();
+          }
+        });
+        return;
+      }
+
+      startHtmlAudio();
     });
   }
 
@@ -3009,28 +3673,71 @@
     });
   }
 
-  /** 只读一个单词或一句话，不打开播放栏 */
-  function speakOne(text, el) {
+  /** 只读一个单词或一段话，不打开播放栏；长段落自动分块、首块开始后预取下一块 */
+  async function speakOne(text, el) {
     const q = ttsClean(text);
     if (!q) return;
+    const triggerAt = performance.now();
+    const chunks = splitTtsChunks(q);
+    if (!chunks.length) return;
+
     const seq = stopPlayback();
+    ttsLoadToken++;
+    tts.loading = false;
     tts.mode = 'single';
     tts.playing = true;
     tts.paused = false;
     tts.index = -1;
     tts.segments = [];
+    tts.lastMetric = {
+      mode: 'single',
+      textLength: q.length,
+      chunks: chunks.length,
+      firstChunkLength: chunks[0].length,
+      voice: ttsVoiceFor(chunks[0]),
+      triggerAt: triggerAt,
+      playingAt: 0,
+      latencyMs: null,
+      how: 'pending'
+    };
     setTtsCurrent(el || null);
     const bar = $('#tts-bar');
     if (bar) bar.hidden = true;
     $('#btn-read').classList.remove('active');
-    playSpeech(q, { seq: seq }).then((r) => {
+
+    for (let k = 0; k < chunks.length; k++) {
       if (seq !== tts.seq) return;
-      tts.playing = false;
-      clearTtsCurrent();
+      const nextChunk = chunks[k + 1];
+      const r = await playSpeech(chunks[k], {
+        seq: seq,
+        onStart: (how) => {
+          if (seq !== tts.seq) return;
+          if (k === 0 && tts.lastMetric && !tts.lastMetric.playingAt) {
+            const now = performance.now();
+            tts.lastMetric.playingAt = now;
+            tts.lastMetric.latencyMs = Math.round((now - tts.lastMetric.triggerAt) * 100) / 100;
+            tts.lastMetric.how = how;
+          }
+          if (nextChunk) prefetchTtsUrl(nextChunk);
+        }
+      });
+      if (seq !== tts.seq) return;
+      if (r.how === 'cancelled') return;
       if (r.how === 'none') {
+        if (tts.lastMetric && tts.lastMetric.how === 'pending') tts.lastMetric.how = 'none';
+        tts.playing = false;
+        clearTtsCurrent();
         toast('语音引擎不可用，请检查网络或在设置里安装语音引擎', 'err');
+        return;
       }
-    });
+      if (k === 0 && tts.lastMetric && tts.lastMetric.how === 'pending') {
+        tts.lastMetric.how = r.how;
+      }
+    }
+
+    if (seq !== tts.seq) return;
+    tts.playing = false;
+    clearTtsCurrent();
   }
 
   /** 收集当前文档的朗读分段（PDF 走文本抽取） */
@@ -3038,6 +3745,12 @@
     const file = state.currentFile;
     if (!file) return [];
     const segs = [];
+    const pushSentence = (raw, extra) => {
+      const maxLen = segs.length === 0 ? 160 : 800;
+      splitLongPiece(raw, maxLen).forEach((piece) => {
+        if (/[A-Za-z一-龥]/.test(piece)) segs.push(Object.assign({ text: piece }, extra || {}));
+      });
+    };
 
     if (extOf(file) === 'pdf') {
       let data = null;
@@ -3055,7 +3768,7 @@
           .trim();
         if (!text) return;
         splitSentences(text).forEach((s) => {
-          if (/[A-Za-z一-龥]/.test(s.text)) segs.push({ text: s.text, page: i + 1 });
+          pushSentence(s.text, { page: i + 1 });
         });
       });
       return segs;
@@ -3070,7 +3783,7 @@
       if (el.classList.contains('bi-lines-host')) {
         $$('.bi-en', el).forEach((en) => {
           const t = ttsClean(en.textContent);
-          if (t) segs.push({ text: t, el: en });
+          if (t) pushSentence(t, { el: en });
         });
         return;
       }
@@ -3078,7 +3791,7 @@
       const text = readableText(el);
       if (!text) return;
       splitSentences(text).forEach((s) => {
-        if (/[A-Za-z一-龥]/.test(s.text)) segs.push({ text: s.text, el: el });
+        pushSentence(s.text, { el: el });
       });
     });
     return segs;
@@ -3104,6 +3817,7 @@
       finishArticle();
       return;
     }
+    const triggerAt = performance.now();
     const seq = stopPlayback();
     tts.mode = 'article';
     tts.index = i;
@@ -3111,12 +3825,41 @@
     tts.paused = false;
 
     const seg = tts.segments[i];
+    const next = tts.segments[i + 1];
+    tts.lastMetric = {
+      mode: 'article',
+      index: i,
+      textLength: seg.text.length,
+      chunks: tts.segments.length,
+      firstChunkLength: seg.text.length,
+      voice: ttsVoiceFor(seg.text),
+      triggerAt: triggerAt,
+      playingAt: 0,
+      latencyMs: null,
+      how: 'pending'
+    };
+
     setTtsCurrent(seg.el || null);
     updateTtsBar(seg);
 
-    playSpeech(seg.text, { seq: seq, rate: ttsRatePercent() }).then((r) => {
+    playSpeech(seg.text, {
+      seq: seq,
+      rate: ttsRatePercent(),
+      onStart: (how) => {
+        if (seq !== tts.seq) return;
+        if (tts.lastMetric && !tts.lastMetric.playingAt) {
+          const now = performance.now();
+          tts.lastMetric.playingAt = now;
+          tts.lastMetric.latencyMs = Math.round((now - tts.lastMetric.triggerAt) * 100) / 100;
+          tts.lastMetric.how = how;
+        }
+        // 首句开始播放后再预取下一句，避免抢占首句合成带宽
+        if (next) prefetchTtsUrl(next.text);
+      }
+    }).then((r) => {
       if (seq !== tts.seq) return;
       if (r.how === 'none') {
+        if (tts.lastMetric && tts.lastMetric.how === 'pending') tts.lastMetric.how = 'none';
         toast('语音引擎不可用，请检查网络或在设置里安装语音引擎', 'err');
         stopTts();
         return;
@@ -3125,22 +3868,6 @@
         playSegment(i + 1);
       }
     });
-
-    // 预取下一句，减少句间等待
-    const next = tts.segments[i + 1];
-    if (next) {
-      try {
-        const u = buildUrl('/api/tts', {
-          text: next.text,
-          voice: ttsVoiceFor(next.text),
-          rate: ttsRatePercent(),
-          lang: state.docLang || ''
-        }).toString();
-        fetch(u).catch(() => {});
-      } catch (_) {
-        /* ignore */
-      }
-    }
   }
 
   function toggleTtsPause() {
@@ -3152,7 +3879,14 @@
       if (tts.paused) {
         tts.paused = false;
         tts.playing = true;
-        tts.audio.play().catch(() => {});
+        if (tts.audio.error) {
+          playSegment(tts.index);
+          return;
+        }
+        tts.audio.play().catch((err) => {
+          if (tts.paused || (err && err.name === 'AbortError')) return;
+          if (tts.index >= 0 && tts.mode === 'article') playSegment(tts.index);
+        });
       } else {
         tts.paused = true;
         tts.playing = false;
@@ -3182,6 +3916,7 @@
   }
 
   function stopTts() {
+    ttsLoadToken++;
     stopPlayback();
     tts.mode = 'idle';
     tts.segments = [];
@@ -3189,6 +3924,7 @@
     tts.playing = false;
     tts.paused = false;
     tts.loading = false;
+    tts.lastMetric = null;
     clearTtsCurrent();
     const bar = $('#tts-bar');
     if (bar) bar.hidden = true;
@@ -3208,7 +3944,9 @@
       return;
     }
     const token = stopPlayback();
+    const loadToken = ++ttsLoadToken;
     tts.loading = true;
+    tts.lastMetric = null;
     clearTtsCurrent();
     tts.mode = 'article';
     tts.segments = [];
@@ -3241,16 +3979,12 @@
         toast('朗读失败：' + e.message, 'err');
       }
     } finally {
-      tts.loading = false;
+      if (loadToken === ttsLoadToken) tts.loading = false;
     }
   }
 
   function initTts() {
-    api('/api/translate/status')
-      .then((s) => {
-        if (s && s.config && s.config.tts) ttsCfg = s.config.tts;
-      })
-      .catch(() => {});
+    loadTranslateStatus();
 
     $('#btn-read').addEventListener('click', startArticle);
     $('#tts-play').addEventListener('click', toggleTtsPause);
@@ -3870,6 +4604,8 @@
     openTranslateSettings: openTranslateSettings,
     tts: {
       state: tts,
+      get lastMetric() { return tts.lastMetric; },
+      splitChunks: splitTtsChunks,
       start: startArticle,
       stop: stopTts,
       speak: speakOne

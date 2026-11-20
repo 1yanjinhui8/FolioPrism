@@ -41,6 +41,7 @@
   - **2-Second Hover / Selection Lookup**: Uses `Intl.Segmenter` for accurate word boundaries (including CJK), querying Youdao Dictionary (with US/UK phonetics for EN→ZH) or falling back to your translation engine, with instant pronunciation.
 - **Neural Text-to-Speech (TTS)**
   - Paragraph-level and full-article/page-by-page PDF narration via `edge-tts` (with `0.7×–1.3×` speed control and language-aware neural voice selection), automatically falling back to the browser's `Web Speech API` when offline or unconfigured.
+  - **Streaming playback**: a persistent Python worker keeps pre-warmed WebSocket connections to the Edge endpoint, and the server streams MP3 frames over HTTP as they arrive. The browser decodes and schedules them with the Web Audio API, so speech starts before the whole clip is synthesized. Long paragraphs are split into a short first chunk (fast start) plus ≤800-character follow-ups, so text over 1,200 characters no longer hits the request limit.
 - **Thoughtful Reading Experience**
   - **Non-Destructive Find (`Ctrl+F` / `F3`)**: Powered by the CSS Custom Highlight API (`CSS.highlights`), skipping translation blocks so layout, TTS highlights, and scroll state stay untouched.
   - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* & *Recent Folders* lists, Light/Dark themes, adjustable font sizes, and reading-width toggle.
@@ -92,6 +93,20 @@ Outputs a standalone portable folder at `dist/FolioPrism-win32-x64/`. Copy the f
 
 > **Offline packaging**: put the matching `electron-v<version>-win32-x64.zip` in a folder and set `ELECTRON_ZIP_DIR` to it before running `npm run dist`.
 
+### Windows Installer
+
+`installer/FolioPrism.iss` builds an Inno Setup 6 installer from the same `dist/FolioPrism-win32-x64/` folder, so the setup and the portable zip ship identical files. Run `installer\生成安装包.bat` (it rebuilds `dist` first), or invoke `ISCC.exe installer\FolioPrism.iss` directly. The installer targets `%LOCALAPPDATA%\Programs\FolioPrism`, needs no admin rights, and deliberately leaves `%APPDATA%\FolioPrism` untouched on uninstall. Set the `ISCC` environment variable if Inno Setup lives somewhere other than the default path.
+
+### Tests
+
+```bash
+npm test            # unit tests: TTS streaming, chunking, state machine, Web Audio player
+npm run test:e2e    # real browser + real Edge TTS latency check (needs network & Chrome/Edge)
+npm run test:packaged   # smoke-test the built dist/ exe (run npm run dist first)
+```
+
+`npm test` is self-contained. `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
+
 ### Verification Script
 
 ```bash
@@ -123,6 +138,8 @@ public/
 prepare-vendor.js   Copies vendor bundles from node_modules
 pack.js             @electron/packager portable win32-x64 build script
 verify.js           End-to-end verification script
+installer/          Inno Setup 6 script for the Windows installer
+test/               Unit, real-browser E2E and packaged-app smoke tests
 start.bat           One-click Windows Web mode launcher
 build/              Application icon (icon.ico)
 ```
@@ -187,6 +204,7 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
   - **悬停 / 划词 2 秒自动查词**：基于 `Intl.Segmenter` 实现中/日/英/泰等多语种分词，英译中优先调用有道词典（带音标与词性释义），并支持一键单词发音。
 - **神经语音朗读（TTS）**
   - 集成 `edge-tts` 神经语音合成，支持按段落点读、整篇连续朗读及 PDF 按页抽取朗读，支持 `0.7×–1.3×` 语速调节与按语种自动匹配母语音色；未安装语音引擎或离线时自动退回浏览器自带 `Web Speech API` 朗读。
+  - **流式朗读**：常驻 Python 工作进程维护预热的 Edge WebSocket 连接，服务端收到 MP3 数据即通过 HTTP 边收边传，浏览器用 Web Audio 逐块解码调度，整段合成完之前就能出声。长段落会拆成「首块较短 + 后续 ≤800 字」多块，超过 1200 字也不会再因长度限制报错。
 - **沉浸式阅读辅助**
   - **无损文档内查找（`Ctrl+F` / `F3`）**：基于 `CSS Custom Highlight API`（`CSS.highlights`）实现，不修改 DOM 结构，不破坏双语排版与朗读高亮，自动跳过译文块。
   - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 与 *最近文件夹* 列表、明暗主题切换、字号与阅读宽度调节。
@@ -238,6 +256,20 @@ npm run dist
 
 > **离线打包**：把对应版本的 `electron-v<版本>-win32-x64.zip` 放进任意目录，运行 `npm run dist` 前设置环境变量 `ELECTRON_ZIP_DIR` 指向该目录即可。
 
+### 构建 Windows 安装包
+
+`installer/FolioPrism.iss` 用同一份 `dist/FolioPrism-win32-x64/` 产出 Inno Setup 6 安装包，因此安装版与绿色版内容完全一致。直接运行 `installer\生成安装包.bat`（会先重新打包 `dist`），或手动执行 `ISCC.exe installer\FolioPrism.iss`。安装包按当前用户装到 `%LOCALAPPDATA%\Programs\FolioPrism`，不弹 UAC；卸载时刻意保留 `%APPDATA%\FolioPrism` 里的阅读进度与设置。Inno Setup 不在默认路径时，用环境变量 `ISCC` 指定。
+
+### 测试
+
+```bash
+npm test                # 单元测试：流式合成、分块、前端状态机、Web Audio 播放器
+npm run test:e2e        # 真实浏览器 + 真实 Edge TTS 延迟实测（需联网与 Chrome/Edge）
+npm run test:packaged   # 对 dist 产物做冒烟测试（先 npm run dist）
+```
+
+`npm test` 不依赖网络。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
+
 ### 端到端验收脚本
 
 ```bash
@@ -269,6 +301,8 @@ public/
 prepare-vendor.js   从 node_modules 复制前端库
 pack.js             @electron/packager 打包脚本（win32-x64 绿色版）
 verify.js           端到端自动化验收脚本
+installer/          Inno Setup 6 安装包脚本
+test/               单元测试、真实浏览器 E2E、打包产物冒烟测试
 start.bat           Windows 一键启动 Web 模式脚本
 build/              应用图标（icon.ico）
 ```

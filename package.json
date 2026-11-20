@@ -1,6 +1,6 @@
 {
   "name": "folioprism",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "license": "MIT",
   "description": "FolioPrism（棱阅）：本地优先的多媒体文档与双语阅读工作台，支持 Markdown / PDF / Office / 代码与音视频",
@@ -11,7 +11,10 @@
     "start": "electron .",
     "predist": "node prepare-vendor.js",
     "dist": "node pack.js",
-    "verify": "node verify.js"
+    "verify": "node verify.js",
+    "test": "node --test test/tts_unit.test.js",
+    "test:e2e": "node test/e2e_real_tts.js",
+    "test:packaged": "node test/packaged_smoke.js"
   },
   "dependencies": {
     "@highlightjs/cdn-assets": "^11.10.0",
