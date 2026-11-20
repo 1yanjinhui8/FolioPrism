@@ -1261,7 +1261,9 @@
     head.appendChild(label);
     const code = pre.querySelector('code') || pre;
     head.appendChild(makeCopyButton(() => code.innerText || code.textContent || ''));
-    pre.parentNode.insertBefore(wrap, pre);
+    // 直接打开文本/代码文件时 pre 还没进 DOM（parentNode 为 null），
+    // 由调用方把 wrap 挂到正文里即可，这里不能无条件 insertBefore
+    if (pre.parentNode) pre.parentNode.insertBefore(wrap, pre);
     wrap.appendChild(head);
     wrap.appendChild(pre);
     return wrap;
