@@ -13,7 +13,7 @@
 
 #define AppName "FolioPrism 棱阅"
 #define AppExeName "FolioPrism.exe"
-#define AppVersion "1.4.0"
+#define AppVersion "1.4.1"
 #define AppPublisher "YJH"
 #define AppURL "https://github.com/1yanjinhui8/FolioPrism"
 ; 允许命令行 /DSourceDir=... 覆盖，便于不打包整个应用就校验脚本语法。
@@ -33,8 +33,8 @@ AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}
 
-; exe 文件属性里的版本信息（与 package.json 的 1.4.0 对应）
-VersionInfoVersion=1.4.0.0
+; exe 文件属性里的版本信息（与 package.json 的 1.4.1 对应）
+VersionInfoVersion=1.4.1.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=FolioPrism 棱阅 安装程序
 VersionInfoProductName={#AppName}

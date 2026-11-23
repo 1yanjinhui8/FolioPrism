@@ -1250,6 +1250,7 @@
     return btn;
   }
 
+  /** 构建代码块包装元素（不操作现有 DOM，由调用方负责挂载） */
   function wrapPre(pre, lang) {
     const wrap = document.createElement('div');
     wrap.className = 'code-block';
@@ -1261,24 +1262,25 @@
     head.appendChild(label);
     const code = pre.querySelector('code') || pre;
     head.appendChild(makeCopyButton(() => code.innerText || code.textContent || ''));
-    // 直接打开文本/代码文件时 pre 还没进 DOM（parentNode 为 null），
-    // 由调用方把 wrap 挂到正文里即可，这里不能无条件 insertBefore
-    if (pre.parentNode) pre.parentNode.insertBefore(wrap, pre);
     wrap.appendChild(head);
     wrap.appendChild(pre);
     return wrap;
   }
 
   function enhanceCode() {
+    const hljs = lib.hljs || (lib.hljs = grabLib('hljs'));
     $$('#content pre').forEach((pre) => {
       if (pre.closest('.code-block')) return;
       const code = pre.querySelector('code') || pre;
       const m = /language-([\w+-]+)/.exec(code.className || '');
       const lang = m ? m[1] : 'text';
-      if (lib.hljs) {
-        try { lib.hljs.highlightElement(code); } catch (_) { /* ignore */ }
+      if (hljs) {
+        try { hljs.highlightElement(code); } catch (_) { /* ignore */ }
       }
-      wrapPre(pre, lang);
+      const parent = pre.parentNode;
+      const next = pre.nextSibling;
+      const wrap = wrapPre(pre, lang);
+      if (parent) parent.insertBefore(wrap, next);
     });
   }
 
@@ -1327,23 +1329,38 @@
   /* ---------------------------------------------------------------- 文本 / 代码文件 */
 
   async function renderTextFile(filePath, seq) {
-    await ensureLib(['hljs']);
-    if (seq !== openSeq) return;
     const data = await api('/api/read', { path: filePath });
     if (seq !== openSeq) return;
-    const lang = extOf(filePath);
+    const lang = extOf(filePath) || 'text';
+    const isPlain = /^(txt|log|text|plaintext)$/i.test(lang);
 
     const c = $('#content');
-    c.innerHTML = '<div class="doc-meta">' + escapeHtml(data.path) + ' · ' + data.size + ' 字节</div>';
+    c.innerHTML =
+      '<div class="doc-meta">' +
+      escapeHtml(data.path) + ' · ' + data.size + ' 字节' +
+      (data.encoding ? ' · ' + escapeHtml(data.encoding) : '') +
+      '</div>';
 
     const pre = document.createElement('pre');
     const code = document.createElement('code');
-    code.className = 'language-' + lang;
     code.textContent = data.text;
     pre.appendChild(code);
-    if (lib.hljs) {
-      try { lib.hljs.highlightElement(code); } catch (_) { /* ignore */ }
+
+    const hljs = lib.hljs || (lib.hljs = grabLib('hljs'));
+    if (!isPlain && hljs) {
+      if (!hljs.getLanguage || hljs.getLanguage(lang)) {
+        code.className = 'language-' + lang;
+        try { hljs.highlightElement(code); } catch (_) { /* ignore */ }
+      } else {
+        code.className = 'language-plaintext';
+      }
+    } else {
+      code.className = 'language-plaintext';
+      if (!isPlain && !hljs) {
+        toast('代码高亮库未加载，已按纯文本显示', 'warn');
+      }
     }
+
     const wrap = wrapPre(pre, lang);
     wrap.classList.add('file-code');
     c.appendChild(wrap);

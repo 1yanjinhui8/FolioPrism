@@ -114,6 +114,10 @@ async function run() {
   const userDataDir = path.join(tmpDir, 'userdata');
   const runId = Date.now().toString(36);
   const sampleMd = path.join(tmpDir, 'packaged_sample_' + runId + '.md');
+  const sampleTxt = path.join(tmpDir, 'packaged_utf8_' + runId + '.txt');
+  const sampleGbkTxt = path.join(tmpDir, 'packaged_gbk_' + runId + '.txt');
+  const samplePy = path.join(tmpDir, 'packaged_sample_' + runId + '.py');
+  const sampleJson = path.join(tmpDir, 'packaged_sample_' + runId + '.json');
 
   const pShort = `Packaged ${runId}. The bundled build must still stream neural speech quickly.`;
   const pLong =
@@ -126,6 +130,10 @@ async function run() {
   assert.ok(pLong.length > 1200, 'long sample must exceed 1200 chars: ' + pLong.length);
 
   fs.writeFileSync(sampleMd, ['# Packaged Smoke ' + runId, '', pShort, '', pLong, ''].join('\n'), 'utf8');
+  fs.writeFileSync(sampleTxt, `Packaged UTF-8 提交说明 ${runId}\nLine 2`, 'utf8');
+  fs.writeFileSync(sampleGbkTxt, Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0xb2, 0xe2, 0xca, 0xd4]));
+  fs.writeFileSync(samplePy, `def packaged_ok():\n    return "${runId}"\n`, 'utf8');
+  fs.writeFileSync(sampleJson, JSON.stringify({ packaged: true, runId }, null, 2), 'utf8');
 
   let appProc = null;
   let cdp = null;
@@ -255,6 +263,36 @@ async function run() {
     const bad = ttsResponses.filter((r) => r.status >= 400);
     assert.equal(bad.length, 0, 'no /api/tts request should fail: ' + JSON.stringify(bad));
     assert.ok(ttsResponses.some((r) => r.voice), 'streamed responses must carry X-TTS-Voice');
+
+    // 8. 直接打开文本与代码文件（UTF-8 / GBK / .py / .json）不再崩溃
+    const textChecks = [
+      { file: sampleTxt, expect: `Packaged UTF-8 提交说明 ${runId}`, label: 'Packaged UTF-8 .txt' },
+      { file: sampleGbkTxt, expect: '中文测试', label: 'Packaged GBK .txt' },
+      { file: samplePy, expect: 'def packaged_ok():', label: 'Packaged Python .py' },
+      { file: sampleJson, expect: `"runId": "${runId}"`, label: 'Packaged JSON .json' },
+    ];
+    for (const tc of textChecks) {
+      const r = await cdp.eval(`
+        (async () => {
+          const ok = await window.__reader.openFile(${JSON.stringify(tc.file)});
+          const c = document.querySelector('#content');
+          return {
+            ok,
+            ready: Boolean(window.__reader.ready),
+            errCards: c.querySelectorAll('.err-card').length,
+            codeBlocks: c.querySelectorAll('.code-block.file-code').length,
+            copyButtons: c.querySelectorAll('button.code-copy').length,
+            text: c.textContent || '',
+          };
+        })()
+      `);
+      assert.equal(r.ok, true, tc.label + ': openFile must succeed');
+      assert.equal(r.ready, true, tc.label + ': ready must be true');
+      assert.equal(r.errCards, 0, tc.label + ': must not render .err-card');
+      assert.equal(r.codeBlocks, 1, tc.label + ': must render 1 .code-block.file-code');
+      assert.equal(r.copyButtons, 1, tc.label + ': must render 1 copy button');
+      assert.ok(r.text.includes(tc.expect), tc.label + ': missing expected content');
+    }
 
     assert.equal(pageExceptions.length, 0, 'no uncaught page exceptions: ' + pageExceptions.join('; '));
     assert.equal(consoleErrors.length, 0, 'no console errors: ' + consoleErrors.join('; '));

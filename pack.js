@@ -23,6 +23,7 @@ const IGNORE = [
   /^\/runtime\.log$/,
   /^\/\.trae(\/|$)/,
   /^\/verify\.js$/,
+  /^\/verify-release\.js$/,
   /^\/prepare-vendor\.js$/,
   /^\/start\.bat$/,
   /^\/pack\.js$/,
