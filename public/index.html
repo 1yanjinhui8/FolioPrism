@@ -21,17 +21,20 @@
 
 <header id="topbar">
   <div class="tb-group tb-left">
-    <button id="btn-open-folder" class="btn btn-primary" title="选择要阅读的文件夹（Ctrl+O）" aria-label="打开文件夹">
-      <span class="ico" aria-hidden="true">📂</span> 打开文件夹
-    </button>
-    <button id="btn-open-file" class="btn" title="选择单个文件打开（Ctrl+Shift+O）" aria-label="打开文件">
-      <span class="ico" aria-hidden="true">📄</span> 打开文件
-    </button>
-    <input id="web-file-input" type="file" hidden aria-label="选择本地文件">
-    <div class="path-box">
-      <input id="root-input" type="text" spellcheck="false" aria-label="文件夹路径" placeholder="粘贴文件夹路径，例如 d:\Documents\notes">
-      <button id="btn-go" class="btn">前往</button>
+    <button id="btn-toc-expand" type="button" class="btn btn-icon toc-expand-btn" title="展开目录栏" aria-label="展开目录栏" aria-expanded="false">目录 »</button>
+    <button id="btn-web-open-file" type="button" class="btn" hidden title="选择本地文件打开">📄 打开文件</button>
+    <div id="web-view-menu" class="web-nav-menu" hidden>
+      <button id="btn-web-view-menu" type="button" class="btn" aria-haspopup="menu" aria-expanded="false" title="阅读视图与翻译设置">
+        视图 <span class="web-menu-caret" aria-hidden="true">▾</span>
+      </button>
+      <div id="web-view-dropdown" class="web-nav-dropdown" role="menu" hidden>
+        <button id="btn-web-font-inc" type="button" class="web-menu-item" role="menuitem">增大字号（A+）</button>
+        <button id="btn-web-font-dec" type="button" class="web-menu-item" role="menuitem">减小字号（A-）</button>
+        <button id="btn-web-width" type="button" class="web-menu-item" role="menuitem">切换阅读宽度</button>
+        <button id="btn-web-translate-settings" type="button" class="web-menu-item" role="menuitem">翻译设置…</button>
+      </div>
     </div>
+    <input id="web-file-input" type="file" hidden aria-label="选择本地文件">
   </div>
 
   <div class="tb-group tb-mid">
@@ -41,12 +44,6 @@
   <div class="tb-group tb-right">
     <button id="btn-read" class="btn btn-icon" title="朗读全文（Edge 神经语音，可暂停和调语速）" aria-label="朗读全文">🔊 朗读</button>
     <button id="btn-bilingual" class="btn btn-icon" title="逐句双语对照：原文 + 译文（点击切换 双语 / 仅译文 / 关闭）" aria-label="切换双语对照">双语</button>
-    <button id="btn-translate-settings" class="btn btn-icon" title="翻译设置" aria-label="翻译设置">⚙</button>
-    <button id="btn-font-dec" class="btn btn-icon" title="缩小字号" aria-label="缩小字号">A-</button>
-    <span id="font-label" class="font-label">18</span>
-    <button id="btn-font-inc" class="btn btn-icon" title="放大字号" aria-label="放大字号">A+</button>
-    <button id="btn-width" class="btn btn-icon" title="切换阅读宽度" aria-label="切换阅读宽度">宽度</button>
-    <button id="btn-toc" class="btn btn-icon" title="显示/隐藏目录" aria-label="显示或隐藏目录">目录</button>
     <button id="btn-theme" class="btn btn-icon" title="切换主题" aria-label="切换主题">主题</button>
   </div>
 </header>
@@ -61,18 +58,16 @@
 
 <main id="layout">
   <aside id="sidebar">
-    <div class="side-head">
-      <span class="side-title">文件</span>
-      <div class="side-tools">
-        <button id="btn-toggle-hidden" type="button" class="btn btn-mini side-toggle" title="显示或隐藏以 . 开头的隐藏文件/文件夹" aria-pressed="false">隐藏项</button>
-        <button id="btn-toggle-deps" type="button" class="btn btn-mini side-toggle" title="显示或隐藏 node_modules 依赖目录" aria-pressed="false">依赖</button>
-        <button id="btn-refresh" class="btn btn-mini" title="重新加载当前目录" aria-label="刷新当前目录">刷新</button>
-      </div>
-    </div>
     <div id="continue" class="continue"></div>
-    <div id="recent" class="recent"></div>
-    <div id="tree-filter-hint" class="tree-filter-hint" hidden></div>
-    <div id="tree" class="tree"><div class="tree-loading">正在读取目录…</div></div>
+    <section class="toc-section" aria-label="文档目录">
+      <div class="side-head toc-head">
+        <button id="btn-toc" type="button" class="btn btn-mini toc-toggle-btn" title="收起目录栏" aria-label="收起目录栏" aria-expanded="true">
+          <span class="toc-btn-label">目录</span>
+          <span class="toc-btn-ico" aria-hidden="true">«</span>
+        </button>
+      </div>
+      <nav id="toc"></nav>
+    </section>
   </aside>
 
   <article id="content">
@@ -81,11 +76,6 @@
       <p>正在载入默认文档…</p>
     </div>
   </article>
-
-  <aside id="toc-rail">
-    <div class="side-head"><span class="side-title">目录</span></div>
-    <nav id="toc"></nav>
-  </aside>
 </main>
 
 <div id="lightbox" hidden>

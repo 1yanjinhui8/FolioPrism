@@ -127,29 +127,7 @@ function resolveDialogStartDir(startDir) {
   }
 }
 
-/** 选文件夹；优先使用传入目录或当前浏览根目录，用户不用每次从头点 */
-async function pickFolder(startDir) {
-  const defaultPath = resolveDialogStartDir(startDir);
-
-  const opts = {
-    title: '选择要阅读的文件夹',
-    defaultPath,
-    buttonLabel: '打开',
-    properties: ['openDirectory'],
-  };
-  // 带父窗口时对话框是模态的，不会被主窗口盖住
-  const r = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, opts)
-    : await dialog.showOpenDialog(opts);
-
-  if (r.canceled || !r.filePaths.length) return null;
-  const chosen = r.filePaths[0];
-  currentRoot = chosen;
-  lastDialogDir = chosen;
-  return chosen;
-}
-
-/** 选单个文件（顶栏或菜单「打开文件…」）。筛选器与渲染器格式表完全同步 */
+/** 选单个文件（菜单「打开文件…」）。筛选器与渲染器格式表完全同步 */
 async function pickFile(startDir) {
   const defaultPath = resolveDialogStartDir(startDir);
 
@@ -171,7 +149,6 @@ async function pickFile(startDir) {
 }
 
 function registerIpc() {
-  ipcMain.handle('reader:pick-folder', (_e, startDir) => pickFolder(startDir));
   ipcMain.handle('reader:pick-file', (_e, startDir) => pickFile(startDir));
   ipcMain.handle('reader:set-current-root', (_e, dir) => {
     const d = String(dir || '').trim();
@@ -201,20 +178,18 @@ function registerIpc() {
   }));
 }
 
-/** 菜单里点「打开文件夹」：主进程弹框，选完把结果推给渲染进程 */
-async function menuOpenFolder() {
-  if (!mainWindow) return;
-  const dir = await pickFolder(currentRoot || lastDialogDir || null);
-  if (!dir || !mainWindow) return;
-  mainWindow.webContents.send('reader:open-folder', dir);
-}
-
 /** 菜单里点「打开文件」：选完直接把文件推给渲染进程 */
 async function menuOpenFile() {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const file = await pickFile(currentRoot || lastDialogDir || null);
   if (!file) return;
   openFileInRenderer(file);
+}
+
+/** 把「视图」菜单里的阅读控制动作转发给渲染进程 */
+function sendViewAction(action) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('reader:view-action', String(action || ''));
 }
 
 /* ------------------------------------------------------------------ */
@@ -232,8 +207,7 @@ function buildMenu() {
     {
       label: '文件',
       submenu: [
-        { label: '打开文件夹…', accelerator: 'CmdOrCtrl+O', click: menuOpenFolder },
-        { label: '打开文件…', accelerator: 'CmdOrCtrl+Shift+O', click: menuOpenFile },
+        { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: menuOpenFile },
         { type: 'separator' },
         { label: '退出', role: 'quit' },
       ],
@@ -241,10 +215,15 @@ function buildMenu() {
     {
       label: '视图',
       submenu: [
+        { label: '增大字号（A+）', click: () => sendViewAction('font-inc') },
+        { label: '减小字号（A-）', click: () => sendViewAction('font-dec') },
+        { label: '切换阅读宽度', click: () => sendViewAction('toggle-width') },
+        { label: '翻译设置…', click: () => sendViewAction('translate-settings') },
+        { type: 'separator' },
         { label: '重新加载', accelerator: 'CmdOrCtrl+R', click: () => mainWindow && mainWindow.reload() },
         { type: 'separator' },
-        { label: '放大', role: 'zoomIn' },
-        { label: '缩小', role: 'zoomOut' },
+        { label: '放大页面', role: 'zoomIn' },
+        { label: '缩小页面', role: 'zoomOut' },
         { label: '实际大小', role: 'resetZoom' },
         { type: 'separator' },
         { label: '全屏', role: 'togglefullscreen' },

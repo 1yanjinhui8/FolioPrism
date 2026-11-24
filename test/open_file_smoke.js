@@ -237,6 +237,68 @@ async function run() {
     }
     assert.equal(ready, true, 'window.__reader must become ready');
 
+    // 验证顶栏视图/文件/路径栏已按方案精简、全文件夹树与右侧栏已移除、目录已移入左侧边栏
+    const layoutState = await cdp.eval(`
+      (() => {
+        const removedIds = [
+          'btn-open-folder',
+          'btn-open-file',
+          'root-input',
+          'btn-go',
+          'btn-translate-settings',
+          'btn-font-dec',
+          'font-label',
+          'btn-font-inc',
+          'btn-width',
+          'tree',
+          'recent',
+          'btn-toggle-hidden',
+          'btn-toggle-deps',
+          'btn-refresh',
+          'toc-rail',
+        ];
+        const removedFound = removedIds.filter((id) => Boolean(document.getElementById(id)));
+        const webOpenBtn = document.getElementById('btn-web-open-file');
+        const webViewMenu = document.getElementById('web-view-menu');
+        const sidebar = document.getElementById('sidebar');
+        const btnToc = document.getElementById('btn-toc');
+        const btnTocExpand = document.getElementById('btn-toc-expand');
+
+        const beforeOff = document.body.classList.contains('toc-off');
+        btnToc.click();
+        const afterCollapse = document.body.classList.contains('toc-off');
+        btnTocExpand.click();
+        const afterExpand = document.body.classList.contains('toc-off');
+
+        return {
+          removedFound,
+          hasReadBtn: Boolean(document.getElementById('btn-read')),
+          hasBilingualBtn: Boolean(document.getElementById('btn-bilingual')),
+          hasThemeBtn: Boolean(document.getElementById('btn-theme')),
+          webOpenHidden: Boolean(webOpenBtn && webOpenBtn.hidden),
+          webViewHidden: Boolean(webViewMenu && webViewMenu.hidden),
+          sidebarHasContinue: Boolean(sidebar && sidebar.querySelector('#continue')),
+          sidebarHasBtnToc: Boolean(sidebar && sidebar.querySelector('#btn-toc')),
+          sidebarHasToc: Boolean(sidebar && sidebar.querySelector('#toc')),
+          beforeOff,
+          afterCollapse,
+          afterExpand,
+        };
+      })()
+    `);
+    assert.deepStrictEqual(layoutState.removedFound, [], 'removed controls must not exist in DOM');
+    assert.equal(layoutState.hasReadBtn, true, '#btn-read must remain in topbar');
+    assert.equal(layoutState.hasBilingualBtn, true, '#btn-bilingual must remain in topbar');
+    assert.equal(layoutState.hasThemeBtn, true, '#btn-theme must remain in topbar');
+    assert.equal(layoutState.webOpenHidden, true, 'Web-only #btn-web-open-file must remain hidden in Electron');
+    assert.equal(layoutState.webViewHidden, true, 'Web-only #web-view-menu must remain hidden in Electron');
+    assert.equal(layoutState.sidebarHasContinue, true, 'left #sidebar must retain #continue');
+    assert.equal(layoutState.sidebarHasBtnToc, true, 'left #sidebar must contain #btn-toc');
+    assert.equal(layoutState.sidebarHasToc, true, 'left #sidebar must contain #toc');
+    assert.equal(layoutState.beforeOff, false, 'left TOC sidebar starts expanded');
+    assert.equal(layoutState.afterCollapse, true, 'clicking #btn-toc collapses sidebar');
+    assert.equal(layoutState.afterExpand, false, 'clicking #btn-toc-expand restores sidebar');
+
     const textCases = [
       { path: utf8Txt, expect: 'UTF-8 提交说明：Hello FolioPrism', expectEnc: 'utf-8', label: 'UTF-8 .txt' },
       { path: utf8BomTxt, expect: 'UTF-8 BOM 测试内容', expectEnc: 'utf-8-bom', label: 'UTF-8 BOM .txt' },
@@ -294,6 +356,7 @@ async function run() {
           paras: c.querySelectorAll('p').length,
           codeBlocks: c.querySelectorAll('.code-block').length,
           copyButtons: c.querySelectorAll('button.code-copy').length,
+          leftTocItems: document.querySelectorAll('#sidebar #toc a').length,
           tags,
           text: c.textContent || '',
         };
@@ -306,6 +369,7 @@ async function run() {
     assert.equal(mdRes.paras, 2, 'Markdown must render 2 paragraphs');
     assert.equal(mdRes.codeBlocks, 1, 'Markdown must render 1 .code-block');
     assert.equal(mdRes.copyButtons, 1, 'Markdown must render 1 copy button');
+    assert.ok(mdRes.leftTocItems >= 1, 'Markdown headings must populate #sidebar #toc');
     assert.ok(mdRes.text.includes('const prism = "ok";'));
     const codeIdx = mdRes.tags.findIndex((t) => t.includes('code-block'));
     assert.ok(codeIdx > 1 && mdRes.tags[codeIdx - 1] === 'P' && mdRes.tags[codeIdx + 1] === 'P',

@@ -227,8 +227,6 @@
     ty: 0,
     translatable: false,
     docLang: '',
-    showHidden: false,
-    showDeps: false,
     activeBlobUrl: '',
     isWebLocalFile: false
   };
@@ -238,16 +236,12 @@
     font: 'media-reader/font',
     wide: 'media-reader/wide',
     tocOff: 'media-reader/tocOff',
-    recent: 'media-reader/recent',
     lastRoot: 'media-reader/lastRoot',
     lastFile: 'media-reader/lastFile',
     scroll: 'media-reader/scroll',
-    expanded: 'media-reader/expandedDirs',
     bilingual: 'media-reader/bilingualMode',
     continueFiles: 'media-reader/continueFiles',
-    video: 'media-reader/videoProgress',
-    showHidden: 'media-reader/showHidden',
-    showDeps: 'media-reader/showDeps'
+    video: 'media-reader/videoProgress'
   };
 
   /** 每次 openFile 自增；异步渲染回来时用它判断自己是否已经过期 */
@@ -342,19 +336,6 @@
       out.push(seg);
     });
     return out.join('\\');
-  }
-
-  function readExpanded() {
-    try {
-      const arr = JSON.parse(localStorage.getItem(LS.expanded) || '[]');
-      return Array.isArray(arr) ? arr : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function writeExpanded(list) {
-    try { localStorage.setItem(LS.expanded, JSON.stringify(list.slice(0, 500))); } catch (_) { /* ignore */ }
   }
 
   const FONT_STEPS = [16, 17, 18, 20, 22];
@@ -495,258 +476,16 @@
   }
 
   /* ==========================================================================
-     需求 1：文件树
+     目录状态同步
      ========================================================================== */
 
-  /** /api/browse 的虚拟路径：本机磁盘列表（「此电脑」） */
-  const DRIVES = '__DRIVES__';
-
-  function iconFor(ent) {
-    if (ent.unreadable) return '⚠';
-    if (ent.isDir) return '▸';
-    const e = ent.ext || extOf(ent.name);
-    if (e === 'md' || e === 'markdown') return '📄';
-    if (IMAGE_EXT.indexOf(e) >= 0) return '🖼';
-    if (VIDEO_EXT.indexOf(e) >= 0) return '🎬';
-    if (AUDIO_EXT.indexOf(e) >= 0) return '🎵';
-    if (e === 'pdf') return '📕';
-    if (SHEET_EXT.indexOf(e) >= 0) return '📊';
-    if (DOCX_EXT.indexOf(e) >= 0) return '📘';
-    if (e === 'pptx') return '📙';
-    if (TEXT_EXT.indexOf(e) >= 0) return '📃';
-    return '📦';
-  }
-
-  function browseParams(dir) {
-    return {
-      path: dir,
-      hidden: state.showHidden ? '1' : '0',
-      deps: state.showDeps ? '1' : '0',
-    };
-  }
-
-  function updateTreeFilterHint(hiddenCount, depsHiddenCount, isDrives) {
-    const box = $('#tree-filter-hint');
-    if (!box) return;
-    if (isDrives) {
-      box.hidden = true;
-      box.textContent = '';
-      return;
-    }
-    const parts = [];
-    if (!state.showHidden && hiddenCount > 0) parts.push(hiddenCount + ' 个隐藏项');
-    if (!state.showDeps && depsHiddenCount > 0) parts.push(depsHiddenCount + ' 个依赖目录');
-    if (!parts.length) {
-      box.hidden = true;
-      box.textContent = '';
-      return;
-    }
-    box.hidden = false;
-    box.textContent = '已隐藏 ' + parts.join('、');
-  }
-
-  function makeRow(ent, parentDir) {
-    const full = ent.path || joinPath(parentDir, ent.name);
-    const wrap = document.createElement('div');
-    const row = document.createElement('div');
-    const resolvedExt = ent.isDir ? '' : (ent.ext || extOf(ent.name));
-    row.className = 'tree-row ' + (ent.isDir ? 'tree-dir' : 'tree-file');
-    row.dataset.path = full;
-    row.dataset.ext = resolvedExt;
-    row.title = full;
-
-    const caret = document.createElement('span');
-    caret.className = 'tree-caret';
-    caret.textContent = ent.isDir && !ent.unreadable ? '▶' : '';
-
-    const ico = document.createElement('span');
-    ico.className = 'tree-ico';
-    ico.textContent = iconFor(ent);
-
-    const name = document.createElement('span');
-    name.className = 'tree-name';
-    name.textContent = ent.name;
-
-    row.appendChild(caret);
-    row.appendChild(ico);
-    row.appendChild(name);
-    wrap.appendChild(row);
-
-    if (ent.unreadable) {
-      row.classList.add('tree-unreadable');
-      const reason = ent.error ? String(ent.error) : '不可访问';
-      row.title = full + '（不可读取：' + reason + '）';
-      const badge = document.createElement('span');
-      badge.className = 'tree-unreadable-tag';
-      badge.textContent = reason;
-      row.appendChild(badge);
-      return wrap;
-    }
-
-    if (ent.isDir) {
-      let children = null;
-      let open = false;
-      let loading = false;
-
-      // 展开状态写进 localStorage：重新打开阅读器时目录树还是原样
-      const remember = () => {
-        const list = readExpanded();
-        const i = list.indexOf(full);
-        if (open && i < 0) { list.unshift(full); writeExpanded(list); }
-        else if (!open && i >= 0) { list.splice(i, 1); writeExpanded(list); }
-      };
-
-      const setOpen = async (next, rememberIt) => {
-        open = next;
-        caret.classList.toggle('open', open);
-        if (open) {
-          if (!children && !loading) {
-            loading = true;
-            children = document.createElement('div');
-            children.className = 'tree-children';
-            children.innerHTML = '<div class="tree-loading">…</div>';
-            wrap.appendChild(children);
-            await fillChildren(full, children);
-            loading = false;
-            children.hidden = !open;
-            // 子目录刚出来时，正在读的文件可能就在里面
-            if (state.currentFile) markActive(state.currentFile);
-          } else if (children) {
-            children.hidden = false;
-          }
-        } else if (children) {
-          children.hidden = true;
-        }
-        if (rememberIt) remember();
-      };
-
-      row.addEventListener('click', () => setOpen(!open, true));
-
-      // 自动展开：记住过的目录，以及当前打开文件的所有上级目录（盘根目录 D:\ 去重末尾斜杠）
-      const normFull = String(full).replace(/[\\/]+$/, '');
-      const ancestorPrefix = (normFull + '\\').toLowerCase();
-      const isAncestor =
-        state.currentFile &&
-        state.currentFile !== full &&
-        String(state.currentFile).replace(/\//g, '\\').toLowerCase().startsWith(ancestorPrefix);
-      if (readExpanded().indexOf(full) >= 0 || isAncestor) setOpen(true, false);
-    } else {
-      row.addEventListener('click', () => openFile(full));
-    }
-    return wrap;
-  }
-
-  async function fillChildren(dir, container) {
-    try {
-      const data = await api('/api/browse', browseParams(dir));
-      container.innerHTML = '';
-      if (!data.entries.length) {
-        container.innerHTML = '<div class="tree-empty">空目录</div>';
-        return;
-      }
-      data.entries.forEach((ent) => container.appendChild(makeRow(ent, dir)));
-    } catch (e) {
-      container.innerHTML = '<div class="tree-empty">读取失败</div>';
-    }
-  }
-
-  /** 文件树顶部的导航行（上一级 / 此电脑），没有它用户会被困在初始目录里 */
-  function makeNavRow(ico, label, onClick) {
-    const row = document.createElement('div');
-    row.className = 'tree-row tree-nav';
-    const i = document.createElement('span');
-    i.className = 'tree-ico';
-    i.textContent = ico;
-    const n = document.createElement('span');
-    n.className = 'tree-name';
-    n.textContent = label;
-    row.appendChild(i);
-    row.appendChild(n);
-    row.addEventListener('click', onClick);
-    return row;
-  }
-
   function syncRootState(dir) {
+    if (!dir) return;
     state.root = dir;
-    const input = $('#root-input');
-    if (input) input.value = dir === DRIVES ? '' : (dir || '');
-    if (dir && dir !== DRIVES) {
-      try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
-      if (window.readerNative && typeof window.readerNative.setCurrentRoot === 'function') {
-        try { window.readerNative.setCurrentRoot(dir); } catch (_) { /* ignore */ }
-      }
+    try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
+    if (window.readerNative && typeof window.readerNative.setCurrentRoot === 'function') {
+      try { window.readerNative.setCurrentRoot(dir); } catch (_) { /* ignore */ }
     }
-  }
-
-  async function loadTree(dir) {
-    const tree = $('#tree');
-    syncRootState(dir);
-    tree.innerHTML = '<div class="tree-loading">正在读取目录…</div>';
-    try {
-      const data = await api('/api/browse', browseParams(dir));
-      tree.innerHTML = '';
-      updateTreeFilterHint(data.hiddenCount || 0, data.depsHiddenCount || 0, dir === DRIVES);
-
-      if (dir !== DRIVES) {
-        tree.appendChild(makeNavRow('💻', '此电脑', () => setRoot(DRIVES)));
-      }
-      if (data.parent) {
-        tree.appendChild(makeNavRow('⬆', '上一级', () => setRoot(data.parent)));
-      }
-
-      if (!data.entries.length) {
-        const empty = document.createElement('div');
-        empty.className = 'tree-empty';
-        const hasFilteredOut =
-          (!state.showHidden && (data.hiddenCount || 0) > 0) ||
-          (!state.showDeps && (data.depsHiddenCount || 0) > 0);
-        empty.textContent = hasFilteredOut ? '当前目录仅有隐藏项（可点击上方开关显示）' : '空目录';
-        tree.appendChild(empty);
-        return;
-      }
-      data.entries.forEach((ent) => tree.appendChild(makeRow(ent, dir)));
-    } catch (e) {
-      updateTreeFilterHint(0, 0, true);
-      tree.innerHTML = '<div class="tree-empty">无法读取此目录</div>';
-      toast('目录读取失败：' + e.message, 'err');
-    }
-  }
-
-  function markActive(filePath) {
-    $$('#tree .tree-row').forEach((r) => r.classList.toggle('active', Boolean(filePath) && r.dataset.path === filePath));
-  }
-
-  function pushRecent(dir) {
-    if (!dir || dir === DRIVES) return;
-    let list = [];
-    try { list = JSON.parse(localStorage.getItem(LS.recent) || '[]'); } catch (_) { list = []; }
-    list = list.filter((d) => d !== dir);
-    list.unshift(dir);
-    list = list.slice(0, 6);
-    localStorage.setItem(LS.recent, JSON.stringify(list));
-    renderRecent();
-  }
-
-  function renderRecent() {
-    let list = [];
-    try { list = JSON.parse(localStorage.getItem(LS.recent) || '[]'); } catch (_) { list = []; }
-    const box = $('#recent');
-    box.innerHTML = '';
-    if (!list.length) return;
-    const label = document.createElement('div');
-    label.className = 'side-title side-title-pad';
-    label.textContent = '最近';
-    box.appendChild(label);
-    list.forEach((d) => {
-      const b = document.createElement('button');
-      b.className = 'recent-item';
-      b.textContent = d;
-      b.title = d;
-      b.addEventListener('click', () => {
-        setRoot(d);
-      });
-      box.appendChild(b);
-    });
   }
 
   /* ---------------------------------------------------- 继续阅读（最近文件 + 进度） */
@@ -812,17 +551,8 @@
   }
 
   async function openContinuePath(p) {
-    const dir = dirOf(p);
-    const cur = String(state.root || '').replace(/[\\/]+$/, '').toLowerCase();
-    const target = String(p).toLowerCase();
-    const inside = cur && (target === cur || target.startsWith(cur + '\\') || target.startsWith(cur + '/'));
-    if (!inside) {
-      state.root = dir;
-      $('#root-input').value = dir;
-      try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
-      await loadTree(dir);
-    }
-    openFile(p);
+    syncRootState(dirOf(p));
+    return openFile(p);
   }
 
   /* ---------------------------------------------------- 视频续播 */
@@ -926,14 +656,14 @@
 
   /**
    * 打开一个「外部送进来的」绝对路径：双击关联、菜单「打开文件」、拖拽都是这条。
-   * 先把侧栏根目录切到文件所在目录，让文件树能定位到它，再走正常渲染流程。
+   * 同步其所在目录供原生对话框续用，再走正常渲染流程。
    */
   function openPath(filePath) {
     const p = String(filePath || '').trim();
     if (!p) return Promise.resolve(false);
     const dir = dirOf(p);
     if (dir && dir !== state.root) {
-      setRoot(dir);
+      syncRootState(dir);
     }
     return openFile(p);
   }
@@ -954,8 +684,7 @@
     state.isWebLocalFile = false;
     state.currentFile = filePath;
     setCrumb(filePath);
-    markActive(filePath);
-    pushRecent(dirOf(filePath));
+    syncRootState(dirOf(filePath));
     touchContinue(filePath);
     clearFind(true);
     document.body.classList.remove('sidebar-open');
@@ -1096,7 +825,6 @@
         '<span class="crumb-dir"> — 浏览器本地文件预览</span>';
       crumb.title = fileName;
     }
-    markActive('');
     clearFind(true);
     document.body.classList.remove('sidebar-open');
 
@@ -1566,12 +1294,24 @@
       .replace(/^-|-$/g, '');
   }
 
+  function clearToc(hint) {
+    const toc = $('#toc');
+    state.tocLinks = [];
+    if (!toc) return;
+    toc.innerHTML = '<div class="toc-empty">' + escapeHtml(hint || '当前文档暂无标题目录') + '</div>';
+  }
+
   function buildToc() {
     const toc = $('#toc');
+    if (!toc) return;
     toc.innerHTML = '';
     state.tocLinks = [];
 
     const heads = $$('#content h1, #content h2, #content h3');
+    if (!heads.length) {
+      clearToc();
+      return;
+    }
     const used = Object.create(null);
 
     heads.forEach((h, i) => {
@@ -1633,7 +1373,7 @@
     const wrap = wrapPre(pre, lang);
     wrap.classList.add('file-code');
     c.appendChild(wrap);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   async function renderTextFile(filePath, seq) {
@@ -1674,7 +1414,7 @@
       '</div>';
     c.innerHTML = '';
     c.appendChild(wrap);
-    $('#toc').innerHTML = '';
+    clearToc();
 
     const frames = $('#pdf-frames');
     const btn = $('#pdf-translate');
@@ -1929,14 +1669,14 @@
       '<div class="pdf-bar">' +
       '<span class="pdf-name">' + escapeHtml(fileName) + '（浏览器本地预览）</span>' +
       '<div class="pdf-actions">' +
-      '<span class="muted">本地预览模式（使用服务端双语翻译请从左侧目录树打开）</span>' +
+      '<span class="muted">本地预览模式（如需服务端双语翻译，请使用桌面版打开该文件）</span>' +
       '</div></div>' +
       '<div class="pdf-frames" id="pdf-frames">' +
       '<iframe class="pdf-frame active" data-frame="src" src="' + escapeAttr(blobUrl) + '"></iframe>' +
       '</div>';
     c.innerHTML = '';
     c.appendChild(wrap);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   /* ---------------------------------------------------------------- Word */
@@ -2057,7 +1797,7 @@
     c.appendChild(tabs);
     c.appendChild(body);
     if (wb.SheetNames && wb.SheetNames.length) show(wb.SheetNames[0]);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   async function renderSheet(filePath, seq) {
@@ -2095,7 +1835,7 @@
     c.appendChild(fig);
     state.lightboxItems = [{ src: url, caption: baseName(filePath) }];
     bindZoom(img, 0);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   function renderVideoFile(filePath, customUrl, displayMeta) {
@@ -2107,7 +1847,7 @@
     fig.innerHTML = '<div class="video-frame"><video controls preload="metadata" src="' +
       escapeAttr(url) + '"></video></div>';
     c.appendChild(fig);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   function renderAudioFile(filePath, customUrl, displayMeta) {
@@ -2129,7 +1869,7 @@
       '<div class="audio-frame"><audio controls preload="metadata" src="' + escapeAttr(url) + '"></audio></div>' +
       '</div>';
     c.appendChild(fig);
-    $('#toc').innerHTML = '';
+    clearToc();
   }
 
   function renderUnsupported(filePath, title, desc, isLocalPreview) {
@@ -2144,7 +1884,7 @@
       '<p class="muted">' + escapeHtml(desc) + '</p>' +
       '<p class="muted path-mono">' + escapeHtml(filePath) + '</p>' +
       '<div class="actions">' + actionsHtml + '</div></div>';
-    $('#toc').innerHTML = '';
+    clearToc();
     const cp = $('#btn-copy-path');
     if (cp) {
       cp.addEventListener('click', () => {
@@ -2178,7 +1918,7 @@
       '<pre>' + escapeHtml(lines.join('\n')) + '</pre>' +
       '<div class="actions"><button class="btn" id="btn-retry">重试</button></div>' +
       '</div>';
-    $('#toc').innerHTML = '';
+    clearToc();
     const rb = $('#btn-retry');
     if (rb) {
       rb.addEventListener('click', () => {
@@ -2922,7 +2662,10 @@
       setBilingualMode(next);
     });
 
-    $('#btn-translate-settings').addEventListener('click', () => openTranslateSettings(false));
+    const btnTransSettings = $('#btn-translate-settings');
+    if (btnTransSettings) {
+      btnTransSettings.addEventListener('click', () => openTranslateSettings(false));
+    }
     $('.tm-close').addEventListener('click', closeTranslateSettings);
     $('.tm-backdrop').addEventListener('click', closeTranslateSettings);
     $('#tm-service').addEventListener('change', toggleOpenAIBlock);
@@ -4330,7 +4073,7 @@
       if (token !== tts.seq) return;
       stopTts();
       if (e.status === 409) {
-        toast('PDF 朗读需要先安装 PDF 引擎：顶栏 ⚙ → 安装 / 修复引擎', 'err');
+        toast('PDF 朗读需要先安装 PDF 引擎：顶部菜单「视图 → 翻译设置…」→ 安装 / 修复引擎', 'err');
       } else {
         toast('朗读失败：' + e.message, 'err');
       }
@@ -4484,8 +4227,23 @@
 
   function applyFont(size) {
     document.documentElement.style.setProperty('--font-size', size + 'px');
-    $('#font-label').textContent = String(size);
+    const label = $('#font-label');
+    if (label) label.textContent = String(size);
     localStorage.setItem(LS.font, String(size));
+  }
+
+  function stepFont(delta) {
+    const cur = parseInt(localStorage.getItem(LS.font) || '18', 10);
+    const curIdx = FONT_STEPS.indexOf(cur);
+    const baseIdx = curIdx >= 0 ? curIdx : FONT_STEPS.indexOf(18);
+    const nextIdx = Math.max(0, Math.min(FONT_STEPS.length - 1, baseIdx + delta));
+    const next = FONT_STEPS[nextIdx];
+    applyFont(next);
+    if (nextIdx === baseIdx) {
+      toast((delta > 0 ? '已是最大字号（' : '已是最小字号（') + next + 'px）');
+    } else {
+      toast('字号：' + next + 'px');
+    }
   }
 
   function applyWide(wide) {
@@ -4493,36 +4251,23 @@
     localStorage.setItem(LS.wide, wide ? '1' : '0');
   }
 
+  function toggleWide() {
+    applyWide(!document.body.classList.contains('wide'));
+    toast(document.body.classList.contains('wide') ? '已切换为全宽' : '已切换为阅读宽度');
+  }
+
   function applyTocOff(off) {
-    document.body.classList.toggle('toc-off', !!off);
-    localStorage.setItem(LS.tocOff, off ? '1' : '0');
-  }
-
-  function syncTreeFilterButtons() {
-    const btnHidden = $('#btn-toggle-hidden');
-    if (btnHidden) {
-      btnHidden.classList.toggle('active', !!state.showHidden);
-      btnHidden.setAttribute('aria-pressed', state.showHidden ? 'true' : 'false');
+    const isOff = !!off;
+    document.body.classList.toggle('toc-off', isOff);
+    localStorage.setItem(LS.tocOff, isOff ? '1' : '0');
+    const btnToc = $('#btn-toc');
+    if (btnToc && typeof btnToc.setAttribute === 'function') {
+      btnToc.setAttribute('aria-expanded', isOff ? 'false' : 'true');
     }
-    const btnDeps = $('#btn-toggle-deps');
-    if (btnDeps) {
-      btnDeps.classList.toggle('active', !!state.showDeps);
-      btnDeps.setAttribute('aria-pressed', state.showDeps ? 'true' : 'false');
+    const btnExpand = $('#btn-toc-expand');
+    if (btnExpand && typeof btnExpand.setAttribute === 'function') {
+      btnExpand.setAttribute('aria-expanded', isOff ? 'false' : 'true');
     }
-  }
-
-  function applyShowHidden(show, reloadTree) {
-    state.showHidden = !!show;
-    try { localStorage.setItem(LS.showHidden, state.showHidden ? '1' : '0'); } catch (_) { /* ignore */ }
-    syncTreeFilterButtons();
-    if (reloadTree && state.root) loadTree(state.root);
-  }
-
-  function applyShowDeps(show, reloadTree) {
-    state.showDeps = !!show;
-    try { localStorage.setItem(LS.showDeps, state.showDeps ? '1' : '0'); } catch (_) { /* ignore */ }
-    syncTreeFilterButtons();
-    if (reloadTree && state.root) loadTree(state.root);
   }
 
   function initPrefs() {
@@ -4536,64 +4281,53 @@
     applyWide(localStorage.getItem(LS.wide) === '1');
     applyTocOff(localStorage.getItem(LS.tocOff) === '1');
 
-    state.showHidden = localStorage.getItem(LS.showHidden) === '1';
-    state.showDeps = localStorage.getItem(LS.showDeps) === '1';
-    syncTreeFilterButtons();
-
-    $('#btn-theme').addEventListener('click', () => {
-      applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
-    });
-    $('#btn-font-inc').addEventListener('click', () => {
-      const cur = parseInt(localStorage.getItem(LS.font) || '18', 10);
-      const i = Math.min(FONT_STEPS.length - 1, FONT_STEPS.indexOf(cur) + 1);
-      applyFont(FONT_STEPS[i]);
-    });
-    $('#btn-font-dec').addEventListener('click', () => {
-      const cur = parseInt(localStorage.getItem(LS.font) || '18', 10);
-      const i = Math.max(0, FONT_STEPS.indexOf(cur) - 1);
-      applyFont(FONT_STEPS[i]);
-    });
-    $('#btn-width').addEventListener('click', () => {
-      applyWide(!document.body.classList.contains('wide'));
-      toast(document.body.classList.contains('wide') ? '已切换为全宽' : '已切换为阅读宽度');
-    });
-    $('#btn-toc').addEventListener('click', () => {
-      applyTocOff(!document.body.classList.contains('toc-off'));
-    });
-
-    const btnHidden = $('#btn-toggle-hidden');
-    if (btnHidden) {
-      btnHidden.addEventListener('click', () => {
-        applyShowHidden(!state.showHidden, true);
+    const btnTheme = $('#btn-theme');
+    if (btnTheme) {
+      btnTheme.addEventListener('click', () => {
+        applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
       });
     }
-    const btnDeps = $('#btn-toggle-deps');
-    if (btnDeps) {
-      btnDeps.addEventListener('click', () => {
-        applyShowDeps(!state.showDeps, true);
+
+    const isNarrowViewport = () => typeof window.innerWidth === 'number' && window.innerWidth <= 780;
+    const btnToc = $('#btn-toc');
+    if (btnToc) {
+      btnToc.addEventListener('click', () => {
+        if (isNarrowViewport()) document.body.classList.remove('sidebar-open');
+        else applyTocOff(true);
+      });
+    }
+    const btnTocExpand = $('#btn-toc-expand');
+    if (btnTocExpand) {
+      btnTocExpand.addEventListener('click', () => {
+        if (isNarrowViewport()) document.body.classList.toggle('sidebar-open');
+        else applyTocOff(false);
       });
     }
   }
 
-  /* ---------------------------------------------------------------- 目录 / 文件选择 */
+  /* ---------------------------------------------------------------- 文件打开 / 视图菜单 */
 
-  /** 切换根目录：输入框、localStorage、主进程目录同步与文件树一起更新 */
   function setRoot(dir) {
     syncRootState(dir);
-    return loadTree(dir);
+    return Promise.resolve();
   }
 
   function initNav() {
     const native = window.readerNative;
 
-    // 菜单「文件 → 打开文件夹…」也是主进程弹框，选完主动推过来
-    if (native && native.onOpenFolder) {
-      native.onOpenFolder((dir) => { if (dir) setRoot(dir); });
-    }
-
     // 菜单「打开文件…」、第二个实例、双击关联文件：主进程把路径推过来
     if (native && native.onOpenFile) {
       native.onOpenFile((p) => { if (p) openPath(p); });
+    }
+
+    // 菜单「视图」里的阅读控制动作（字号、宽度、翻译设置）
+    if (native && native.onViewAction) {
+      native.onViewAction((action) => {
+        if (action === 'font-inc') stepFont(1);
+        else if (action === 'font-dec') stepFont(-1);
+        else if (action === 'toggle-width') toggleWide();
+        else if (action === 'translate-settings') openTranslateSettings(false);
+      });
     }
 
     // 从资源管理器直接把文件拖进窗口
@@ -4623,50 +4357,75 @@
         openWebLocalFile(file);
         return;
       }
-      toast('无法读取拖入文件的路径，请改用「打开文件」按钮', 'err');
+      toast('无法读取拖入文件的路径，请改用「文件 → 打开文件…」', 'err');
     });
 
-    // Electron 下走主进程的原生文件夹对话框：主进程是前台进程，
-    // 不存在「对话框被前台锁定、弹到窗口后面」的问题，用起来和普通桌面软件一样。
-    $('#btn-open-folder').addEventListener('click', async () => {
-      if (native && native.pickFolder) {
-        let dir = null;
-        try {
-          dir = await native.pickFolder(state.root === DRIVES ? '' : state.root || '');
-        } catch (e) {
-          toast('打开文件夹失败：' + e.message, 'err');
-          return;
-        }
-        if (dir) setRoot(dir);
-        return;
-      }
-
-      // 纯浏览器模式没有原生对话框，退回应用内：从「此电脑」开始逐级点进去
-      setRoot(DRIVES);
-      toast('从「此电脑」里选一个磁盘，再逐级点进文件夹');
-    });
-
-    // 顶栏「打开文件」按钮：Electron 下调主进程原生对话框，Web 模式触发隐藏 <input type="file">
-    const btnOpenFile = $('#btn-open-file');
+    // Electron 下「打开文件」与「视图」设置统一在原生导航栏菜单中；
+    // 纯浏览器模式没有原生菜单栏，顶栏展示简洁的「打开文件」与「视图 ▾」下拉作为替代。
+    const isElectron = Boolean(native && native.isElectron);
+    const btnWebOpenFile = $('#btn-web-open-file');
+    const webViewMenu = $('#web-view-menu');
+    const btnWebViewMenu = $('#btn-web-view-menu');
+    const webViewDropdown = $('#web-view-dropdown');
+    const btnWebFontInc = $('#btn-web-font-inc');
+    const btnWebFontDec = $('#btn-web-font-dec');
+    const btnWebWidth = $('#btn-web-width');
+    const btnWebTranslateSettings = $('#btn-web-translate-settings');
     const webFileInput = $('#web-file-input');
-    if (btnOpenFile) {
-      btnOpenFile.addEventListener('click', async () => {
-        if (native && native.pickFile) {
-          let file = null;
-          try {
-            file = await native.pickFile(state.root === DRIVES ? '' : state.root || '');
-          } catch (e) {
-            toast('打开文件失败：' + e.message, 'err');
-            return;
+
+    const closeWebViewMenu = () => {
+      if (webViewDropdown) webViewDropdown.hidden = true;
+      if (btnWebViewMenu && typeof btnWebViewMenu.setAttribute === 'function') {
+        btnWebViewMenu.setAttribute('aria-expanded', 'false');
+      }
+    };
+
+    if (btnWebOpenFile) btnWebOpenFile.hidden = isElectron;
+    if (webViewMenu) webViewMenu.hidden = isElectron;
+
+    if (!isElectron) {
+      if (btnWebOpenFile) {
+        btnWebOpenFile.addEventListener('click', () => {
+          closeWebViewMenu();
+          if (webFileInput) {
+            webFileInput.value = '';
+            webFileInput.click();
           }
-          if (file) openPath(file);
-          return;
+        });
+      }
+      if (webViewMenu && btnWebViewMenu && webViewDropdown) {
+        btnWebViewMenu.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const nextOpen = Boolean(webViewDropdown.hidden);
+          webViewDropdown.hidden = !nextOpen;
+          if (typeof btnWebViewMenu.setAttribute === 'function') {
+            btnWebViewMenu.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+          }
+        });
+        if (btnWebFontInc) {
+          btnWebFontInc.addEventListener('click', () => { closeWebViewMenu(); stepFont(1); });
         }
-        if (webFileInput) {
-          webFileInput.value = '';
-          webFileInput.click();
+        if (btnWebFontDec) {
+          btnWebFontDec.addEventListener('click', () => { closeWebViewMenu(); stepFont(-1); });
         }
-      });
+        if (btnWebWidth) {
+          btnWebWidth.addEventListener('click', () => { closeWebViewMenu(); toggleWide(); });
+        }
+        if (btnWebTranslateSettings) {
+          btnWebTranslateSettings.addEventListener('click', () => {
+            closeWebViewMenu();
+            openTranslateSettings(false);
+          });
+        }
+        document.addEventListener('click', (e) => {
+          if (webViewDropdown.hidden) return;
+          if (typeof webViewMenu.contains === 'function' && webViewMenu.contains(e.target)) return;
+          closeWebViewMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && !webViewDropdown.hidden) closeWebViewMenu();
+        });
+      }
     }
     if (webFileInput) {
       webFileInput.addEventListener('change', () => {
@@ -4674,19 +4433,6 @@
         if (f) openWebLocalFile(f);
       });
     }
-
-    $('#btn-go').addEventListener('click', goRoot);
-    $('#root-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') goRoot(); });
-    $('#btn-refresh').addEventListener('click', () => {
-      if (state.root) loadTree(state.root);
-      if (state.currentFile && !state.isWebLocalFile) openFile(state.currentFile);
-    });
-  }
-
-  function goRoot() {
-    const v = ($('#root-input').value || '').trim().replace(/^"|"$/g, '');
-    if (!v) return;
-    setRoot(v);
   }
 
   /* ==========================================================================
@@ -4893,7 +4639,6 @@
   function updateStats() {
     const c = $('#content');
     const imgs = $$('img', c);
-    const treeFiles = $$('#tree .tree-file');
     window.__reader.stats = {
       file: state.currentFile,
       imgs: imgs.length,
@@ -4905,8 +4650,8 @@
       codeBlocks: $$('pre', c).length,
       copyButtons: $$('button.code-copy', c).length,
       videoEmbeds: $$('iframe[src*="player.bilibili.com"], iframe[src*="youtube.com/embed"]', c).length,
-      treeFiles: treeFiles.length,
-      mdFiles: treeFiles.filter((r) => /\.(md|markdown)$/i.test(r.dataset.path || '')).length,
+      treeFiles: 0,
+      mdFiles: 0,
       translations: $$('.trans-block', c).length,
       bilingualMode: bi.mode,
       progress: $('#progress > i').style.width,
@@ -4933,7 +4678,6 @@
     initTts();
     initFind();
     initVideoProgress();
-    renderRecent();
     renderContinue();
 
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -4983,12 +4727,8 @@
     if (!lastRoot && lastFile) lastRoot = dirOf(lastFile);
     if (launchFile) lastRoot = dirOf(launchFile);
 
-    state.root = lastRoot || state.config.defaultRoot;
-    $('#root-input').value = state.root;
-    // 先把目标文件挂上，文件树据此自动展开它的上级目录
+    syncRootState(lastRoot || state.config.defaultRoot);
     if (!state.currentFile) state.currentFile = launchFile || lastFile || '';
-
-    await loadTree(state.root);
 
     // 优先打开启动参数里的文件，否则回到上次读的文件；它不在了再退回默认文件
     const fallback = state.config.defaultFile;
@@ -5016,8 +4756,9 @@
       crumb.innerHTML = '';
       crumb.title = '';
     }
+    clearToc('打开文档后显示目录');
     $('#content').innerHTML = '<div class="welcome"><h1>FolioPrism <span class="brand-zh">棱阅</span></h1>' +
-      '<p class="muted">请在左侧选择一个文件开始阅读，或用「文件 → 打开文件…」（Ctrl+Shift+O）打开任意文档。</p></div>';
+      '<p class="muted">请通过顶部菜单「文件 → 打开文件…」（Ctrl+O）、拖拽文件到窗口，或从左侧「继续阅读」打开文档。</p></div>';
     window.__reader.ready = true;
     updateStats();
   }
