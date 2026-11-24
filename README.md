@@ -44,9 +44,9 @@
   - **Streaming playback**: a persistent Python worker keeps pre-warmed WebSocket connections to the Edge endpoint, and the server streams MP3 frames over HTTP as they arrive. The browser decodes and schedules them with the Web Audio API, so speech starts before the whole clip is synthesized. Long paragraphs are split into a short first chunk (fast start) plus ≤800-character follow-ups, so text over 1,200 characters no longer hits the request limit.
 - **Thoughtful Reading Experience**
   - **Non-Destructive Find (`Ctrl+F` / `F3`)**: Powered by the CSS Custom Highlight API (`CSS.highlights`), skipping translation blocks so layout, TTS highlights, and scroll state stay untouched.
-  - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* & *Recent Folders* lists, Light/Dark themes, adjustable font sizes, and reading-width toggle.
-  - **Sidebar Discovery & Single-File Preview**: Sidebar toggles for **Hidden Items** (`.gitignore`, `.env`, etc.) and **Dependencies** (`node_modules`) with hidden-count indicators and explicit grayed-out rows for unreadable/broken-link entries. Top-bar **Open File** button opens the native dialog in Electron or previews local files directly in the browser via the HTML5 `File API` in Web mode.
-  - **Desktop Integration**: Single-instance window, drag-and-drop file opening, Windows *"Open with"* & Default Apps registration (without hijacking existing defaults), CLI file arguments, and a virtual **"This PC"** drive browser in standalone Web mode.
+  - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* list, Light/Dark themes, adjustable font sizes, and reading-width toggle.
+  - **Clean Menu & Left-Sidebar Outline**: Desktop mode puts **Open File** (`Ctrl+O`) under the top **File** menu and reading font size / width / translation settings under the **View** menu (standalone Web mode provides compact top-bar **Open File** and **View** dropdown controls). The left sidebar focuses on *Continue Reading* and a collapsible document **Table of Contents**, removing full-disk folder tree navigation.
+  - **Desktop Integration**: Single-instance window, drag-and-drop file opening, Windows *"Open with"* & Default Apps registration (without hijacking existing defaults), and CLI file arguments.
 
 ### Requirements
 
@@ -211,9 +211,9 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
   - **流式朗读**：常驻 Python 工作进程维护预热的 Edge WebSocket 连接，服务端收到 MP3 数据即通过 HTTP 边收边传，浏览器用 Web Audio 逐块解码调度，整段合成完之前就能出声。长段落会拆成「首块较短 + 后续 ≤800 字」多块，超过 1200 字也不会再因长度限制报错。
 - **沉浸式阅读辅助**
   - **无损文档内查找（`Ctrl+F` / `F3`）**：基于 `CSS Custom Highlight API`（`CSS.highlights`）实现，不修改 DOM 结构，不破坏双语排版与朗读高亮，自动跳过译文块。
-  - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 与 *最近文件夹* 列表、明暗主题切换、字号与阅读宽度调节。
-  - **侧栏文件发现与单文件预览**：侧栏提供**隐藏项**（`.gitignore`、`.env` 等）与**依赖目录**（`node_modules`）独立开关及隐藏计数提示，对无权限或断开符号链接项以灰显占位行展示原因；顶栏提供**打开文件**按钮，桌面版调起同步当前目录的原生文件选择框，纯浏览器 Web 模式直接基于浏览器 `File API` 本地预览单文件。
-  - **桌面与 Web 双栖**：支持单实例运行、拖放文件打开、Windows「打开方式 / 默认应用列表 / 命令行传参」直接打开（安装包可选注册 `HKCU` 文件关联而不强行篡改现有默认程序）；纯浏览器模式下提供虚拟「此电脑」全盘浏览入口。
+  - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 列表、明暗主题切换、字号与阅读宽度调节。
+  - **简洁菜单与左侧目录栏**：桌面端将**打开文件**（`Ctrl+O`）整合进顶部菜单栏「文件」，将**字号调节（A+ / A-）、阅读宽度、翻译设置**整合进「视图」菜单（纯浏览器 Web 模式在顶栏提供「打开文件」与「视图 ▾」下拉菜单，并支持 `File API` 本地预览）。左侧边栏保留**继续阅读**与可收起/展开的**文档目录**，不再展示全盘文件夹树。
+  - **桌面与 Web 双栖**：支持单实例运行、拖放文件打开、Windows「打开方式 / 默认应用列表 / 命令行传参」直接打开（安装包可选注册 `HKCU` 文件关联而不强行篡改现有默认程序）。
 
 ### 环境要求
 

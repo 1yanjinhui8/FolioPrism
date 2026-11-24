@@ -1,6 +1,6 @@
 {
   "name": "folioprism",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "license": "MIT",
   "description": "FolioPrism（棱阅）：本地优先的多媒体文档与双语阅读工作台，支持 Markdown / PDF / Office / 代码与音视频",
