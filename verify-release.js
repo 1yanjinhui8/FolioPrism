@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const asar = require('@electron/asar');
+const formats = require('./public/formats');
 
 const ROOT = __dirname;
 const REQUIRE_RELEASE = process.argv.includes('--require-release');
@@ -76,6 +77,7 @@ async function main() {
       'preload.js',
       'server.js',
       'translator.js',
+      'public/formats.js',
       'public/app.js',
       'public/index.html',
       'public/style.css',
@@ -107,6 +109,24 @@ async function main() {
       !hasLegacyCrash,
       hasLegacyCrash ? '检测到旧版未判空 insertBefore 调用' : '未发现旧版崩溃代码'
     );
+
+    const asarMainJs = asar.extractFile(asarPath, 'main.js').toString('utf8');
+    const firstFilterExts =
+      formats.FILE_DIALOG_FILTERS &&
+      formats.FILE_DIALOG_FILTERS[0] &&
+      Array.isArray(formats.FILE_DIALOG_FILTERS[0].extensions)
+        ? formats.FILE_DIALOG_FILTERS[0].extensions
+        : [];
+    const filterSet = new Set(firstFilterExts);
+    const missingFromFilter = formats.OPENABLE_EXT.filter((e) => !filterSet.has(e));
+    const mainUsesFormatsFilter = asarMainJs.includes('formats.FILE_DIALOG_FILTERS');
+    record(
+      '6. 文件对话框筛选器完整覆盖 OPENABLE_EXT',
+      mainUsesFormatsFilter && missingFromFilter.length === 0,
+      mainUsesFormatsFilter && missingFromFilter.length === 0
+        ? `共覆盖全部 ${formats.OPENABLE_EXT.length} 个可打开扩展名`
+        : `mainUsesFormatsFilter=${mainUsesFormatsFilter}, missing=${missingFromFilter.join(',')}`
+    );
   }
 
   const releaseDir = path.join(ROOT, 'dist', 'release');
@@ -125,7 +145,7 @@ async function main() {
   if (REQUIRE_RELEASE || existingRelease.length > 0) {
     const missing = releaseFiles.filter((p) => !fs.existsSync(p)).map((p) => path.basename(p));
     record(
-      '6. release 产物文件齐全',
+      '7. release 产物文件齐全',
       missing.length === 0,
       missing.length === 0 ? `${setupName}, ${zipName}, ${sumsName}, ${notesName}` : '缺失: ' + missing.join(', ')
     );
@@ -145,7 +165,7 @@ async function main() {
         parsedSums.get(setupName) === actualSetup &&
         parsedSums.get(zipName) === actualZip;
       record(
-        '7. SHA256SUMS.txt 校验一致',
+        '8. SHA256SUMS.txt 校验一致',
         sumsOk,
         `setup=${actualSetup.slice(0, 12)} (${parsedSums.get(setupName) === actualSetup ? 'ok' : 'mismatch'}), zip=${actualZip.slice(0, 12)} (${parsedSums.get(zipName) === actualZip ? 'ok' : 'mismatch'})`
       );
@@ -154,7 +174,7 @@ async function main() {
         const notesRaw = fs.readFileSync(notesPath, 'utf8');
         const notesOk = notesRaw.includes(actualSetup) && notesRaw.includes(actualZip);
         record(
-          '8. RELEASE_NOTES 内 SHA256 与产物一致',
+          '9. RELEASE_NOTES 内 SHA256 与产物一致',
           notesOk,
           notesOk ? `${notesName} 校验值匹配` : `${notesName} 缺少或错配 SHA256`
         );

@@ -1,0 +1,93 @@
+# FolioPrism（棱阅）
+
+> 本地优先的多媒体文档与双语阅读工作台：Windows 桌面应用，Markdown / PDF / DOCX / XLSX / 代码 / 图片 / 音视频都能在同一个窗口阅读，英文论文支持逐句双语对照。
+
+这个文件是给 AI 工具与抓取器准备的单一入口：抓到这一个地址就能拿到项目全貌、核心文件的 raw 地址和运行方式，不必解析 GitHub 网页。
+
+仓库：https://github.com/1yanjinhui8/FolioPrism
+默认分支：main
+最新版本：1.5.0
+许可证：MIT（Copyright (c) 2026 YJH）
+
+## 项目定位
+
+- 面向「本地文件夹里躺着的一堆 Markdown 笔记、学术 PDF、Office 文档和源码」的阅读器，不做书库管理、不做云同步。
+- 全部处理在本机完成；只有在用户主动翻译或朗读时，才把待处理的文本片段发给所选服务。
+- 差异化：PDF 保留排版的双语对照（pdf2zh）、悬停/划词查词、流式神经语音朗读。
+
+## 技术栈
+
+- Electron 44 主进程（`main.js`）：窗口、菜单、原生对话框、文件关联、单实例。
+- `server.js`：零第三方依赖的 Node.js `http` 服务，默认 `127.0.0.1:7788`，带令牌鉴权、路径边界、Range 流媒体。
+- `public/`：没有构建步骤的纯前端（原生 ES 模块 + `<script>`），库由 `npm run setup` 从 node_modules 拷到 `public/vendor/`。
+- `translator.js`：文本/PDF 翻译、悬停查词、pdf2zh 调用、edge-tts 流式合成、缓存清理、uv 一键安装。
+- 可选外部工具（在应用内通过 uv 一键安装）：`pdf2zh`、`edge-tts`。
+
+## 核心文件
+
+- [README.md](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/README.md)：完整功能说明（中英双语）
+- [package.json](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/package.json)：依赖与全部 npm 脚本
+- [main.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/main.js)：Electron 主进程
+- [preload.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/preload.js)：最小 IPC 面
+- [server.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/server.js)：本地 HTTP 服务（目录浏览、编码识别、Range、鉴权）
+- [translator.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/translator.js)：翻译 / 查词 / TTS / 引擎安装
+- [public/index.html](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/index.html)：前端骨架
+- [public/formats.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/formats.js)：前后端共享的统一格式注册表（UMD）
+- [public/app.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/app.js)：多格式渲染、双语引擎、朗读、查找、灯箱
+- [public/style.css](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/style.css)：明暗主题与排版
+- [pack.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/pack.js)：@electron/packager 打包脚本（win32-x64 绿色版）
+- [installer/FolioPrism.iss](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/installer/FolioPrism.iss)：Inno Setup 6 安装包脚本
+- [verify.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/verify.js)：端到端验收脚本
+
+## 目录结构
+
+```text
+main.js             Electron 主进程：窗口、菜单、原生对话框、文件关联
+preload.js          contextBridge 暴露的最小 IPC 接口
+server.js           零依赖本地 HTTP 服务：目录浏览、编码识别、Range、鉴权
+translator.js       翻译 / 查词 / pdf2zh / edge-tts / 缓存清理 / uv 安装
+public/
+  index.html        前端骨架与翻译、朗读、查找面板
+  formats.js        前后端共享的统一格式注册表（UMD）
+  app.js            多格式渲染、双语引擎、TTS、灯箱、阅读辅助
+  style.css         明暗主题与排版
+  vendor/           由 npm run setup 生成，不入库
+pack.js             打包脚本（win32-x64 绿色版）
+installer/          Inno Setup 6 安装包脚本
+test/               单元测试、真实浏览器 E2E、打包产物冒烟测试
+verify.js           端到端验收脚本
+verify-release.js   对打包产物的发布前校验
+```
+
+## 运行与测试
+
+```bash
+npm install        # 安装依赖
+npm run setup      # 把前端库复制到 public/vendor（不可跳过）
+npm start          # 启动 Electron 桌面窗口
+npm run web        # 纯浏览器模式
+
+npm test           # 单元测试（不联网）
+npm run test:e2e   # 真实浏览器 + 真实 Edge TTS 延迟实测（需联网）
+npm run test:packaged  # 打包产物冒烟测试（先 npm run dist）
+npm run verify     # 端到端验收（可传样本 Markdown 路径）
+```
+
+打包（离线）：
+
+```bash
+ELECTRON_ZIP_DIR="D:/path/to/electron-cache" npm run dist
+```
+
+## 数据与隐私
+
+- 配置与缓存写入 `%LOCALAPPDATA%\folioprism\`（config.json、text-cache.json、cache/pdf、cache/tts）。
+- 阅读进度与最近文件保存在 `%APPDATA%\FolioPrism`；卸载安装包不会删除这些数据。
+- 本地文件不会上传；仅在使用云端翻译、查词或 Edge TTS 时发送待处理的文本片段。
+
+## 版本历史
+
+- 1.5.0：新增统一格式注册表（`public/formats.js`），补齐音频（mp3/wav/m4a/flac/ogg）与 mkv/ogv 视频、点文件（.gitignore/.env）及无扩展名文件（Makefile/Dockerfile/LICENSE/README）支持；侧栏新增隐藏项/依赖目录开关与不可读占位行；顶栏新增「打开文件」按钮并支持 Web 模式本地 File API 预览；安装包支持注册 Windows「打开方式」与默认应用关联。
+- 1.4.1：修复直接打开文本/代码文件时的渲染崩溃，补齐发布门禁。
+- 1.4.0：朗读改为流式合成与流式播放（常驻 worker + HTTP 分块 + Web Audio 边解边播），新增安装包脚本与三层测试。
+- 1.3.0：首个公开发行版，更名 FolioPrism 棱阅，支持命令行/拖拽/打开方式打开文件，MIT 许可。

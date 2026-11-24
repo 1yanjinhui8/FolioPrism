@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('readerNative', {
    */
   pickFolder: (startDir) => ipcRenderer.invoke('reader:pick-folder', String(startDir || '')),
 
+  /** 弹出原生文件选择框，返回选中的绝对路径；取消返回 null */
+  pickFile: (startDir) => ipcRenderer.invoke('reader:pick-file', String(startDir || '')),
+
+  /** 同步当前正在浏览的目录到主进程，作为下次原生文件/文件夹对话框的默认目录 */
+  setCurrentRoot: (dir) => ipcRenderer.invoke('reader:set-current-root', String(dir || '')),
+
   /** 用系统默认程序打开外部链接 */
   openExternal: (url) => ipcRenderer.invoke('reader:open-external', String(url || '')),
 

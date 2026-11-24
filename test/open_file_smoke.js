@@ -107,8 +107,8 @@ async function run() {
     spawnCwd = path.dirname(APP_EXE);
   } else {
     exePath = require('electron');
-    spawnArgs = ['.'];
-    spawnCwd = ROOT_DIR;
+    spawnArgs = [ROOT_DIR];
+    spawnCwd = os.tmpdir();
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-open-smoke-'));
@@ -125,6 +125,12 @@ async function run() {
   const sampleJson = path.join(fixturesDir, 'sample.json');
   const sampleIni = path.join(fixturesDir, 'sample.ini');
   const sampleMd = path.join(fixturesDir, 'sample.md');
+  const sampleMakefile = path.join(fixturesDir, 'Makefile');
+  const sampleDockerfile = path.join(fixturesDir, 'Dockerfile');
+  const sampleLicense = path.join(fixturesDir, 'LICENSE');
+  const sampleGitignore = path.join(fixturesDir, '.gitignore');
+  const sampleEnv = path.join(fixturesDir, '.env');
+  const sampleWav = path.join(fixturesDir, 'sample.wav');
 
   fs.writeFileSync(utf8Txt, 'UTF-8 提交说明：Hello FolioPrism\n第二行正文', 'utf8');
   fs.writeFileSync(
@@ -150,6 +156,28 @@ async function run() {
   fs.writeFileSync(samplePy, 'def hello_prism(name):\n    return f"hi {name}"\n', 'utf8');
   fs.writeFileSync(sampleJson, '{\n  "name": "FolioPrism",\n  "ok": true\n}\n', 'utf8');
   fs.writeFileSync(sampleIni, '[reader]\nport = 7788\nmode = local\n', 'utf8');
+  fs.writeFileSync(sampleMakefile, 'build:\n\tnode pack.js\n', 'utf8');
+  fs.writeFileSync(sampleDockerfile, 'FROM node:22-alpine\nWORKDIR /app\n', 'utf8');
+  fs.writeFileSync(sampleLicense, 'MIT License\nCopyright (c) 2026 YJH\n', 'utf8');
+  fs.writeFileSync(sampleGitignore, 'node_modules/\ndist/\nruntime.log\n', 'utf8');
+  fs.writeFileSync(sampleEnv, 'READER_PORT=7788\nREADER_MODE=local\n', 'utf8');
+
+  // 生成一段合法的最小 RIFF WAVE PCM 音频头（8kHz 单声道 8-bit 静音）
+  const wavSamples = 400;
+  const wavBuf = Buffer.alloc(44 + wavSamples, 0x80);
+  wavBuf.write('RIFF', 0);
+  wavBuf.writeUInt32LE(36 + wavSamples, 4);
+  wavBuf.write('WAVEfmt ', 8);
+  wavBuf.writeUInt32LE(16, 16);
+  wavBuf.writeUInt16LE(1, 20);
+  wavBuf.writeUInt16LE(1, 22);
+  wavBuf.writeUInt32LE(8000, 24);
+  wavBuf.writeUInt32LE(8000, 28);
+  wavBuf.writeUInt16LE(1, 32);
+  wavBuf.writeUInt16LE(8, 34);
+  wavBuf.write('data', 36);
+  wavBuf.writeUInt32LE(wavSamples, 40);
+  fs.writeFileSync(sampleWav, wavBuf);
   fs.writeFileSync(
     sampleMd,
     [
@@ -218,6 +246,11 @@ async function run() {
       { path: samplePy, expect: 'def hello_prism(name):', expectEnc: 'utf-8', label: 'Python .py' },
       { path: sampleJson, expect: '"name": "FolioPrism"', expectEnc: 'utf-8', label: 'JSON .json' },
       { path: sampleIni, expect: 'port = 7788', expectEnc: 'utf-8', label: 'INI .ini' },
+      { path: sampleMakefile, expect: 'node pack.js', expectEnc: 'utf-8', label: 'Extensionless Makefile' },
+      { path: sampleDockerfile, expect: 'FROM node:22-alpine', expectEnc: 'utf-8', label: 'Extensionless Dockerfile' },
+      { path: sampleLicense, expect: 'MIT License', expectEnc: 'utf-8', label: 'Extensionless LICENSE' },
+      { path: sampleGitignore, expect: 'node_modules/', expectEnc: 'utf-8', label: 'Dotfile .gitignore' },
+      { path: sampleEnv, expect: 'READER_PORT=7788', expectEnc: 'utf-8', label: 'Dotfile .env' },
     ];
 
     for (const tc of textCases) {
@@ -278,6 +311,54 @@ async function run() {
     assert.ok(codeIdx > 1 && mdRes.tags[codeIdx - 1] === 'P' && mdRes.tags[codeIdx + 1] === 'P',
       'Markdown fenced block must remain between paragraphs, got ' + JSON.stringify(mdRes.tags));
     console.log('PASS [' + (PACKAGED ? 'packaged' : 'source') + '] Markdown fenced code block');
+
+    // 音频文件（.wav）渲染检查
+    const audioRes = await cdp.eval(`
+      (async () => {
+        const ok = await window.__reader.openFile(${JSON.stringify(sampleWav)});
+        const c = document.querySelector('#content');
+        const audio = c.querySelector('audio');
+        return {
+          ok,
+          ready: Boolean(window.__reader.ready),
+          errCards: c.querySelectorAll('.err-card').length,
+          audioEmbeds: c.querySelectorAll('.audio-embed').length,
+          hasAudioSrc: Boolean(audio && audio.getAttribute('src')),
+          title: (c.querySelector('.audio-title') || {}).textContent || '',
+        };
+      })()
+    `);
+    assert.equal(audioRes.ok, true, 'Audio openFile must return true');
+    assert.equal(audioRes.ready, true, 'Audio ready must be true');
+    assert.equal(audioRes.errCards, 0, 'Audio must not render .err-card');
+    assert.equal(audioRes.audioEmbeds, 1, 'Audio must render 1 .audio-embed');
+    assert.equal(audioRes.hasAudioSrc, true, 'Audio element must have src');
+    assert.equal(audioRes.title, 'sample.wav');
+    console.log('PASS [' + (PACKAGED ? 'packaged' : 'source') + '] Audio .wav player card');
+
+    // Web 模式 File API 本地单文件预览检查
+    const webLocalRes = await cdp.eval(`
+      (async () => {
+        const f = new File(['Web File API 本地预览内容\\nLine 2'], 'web_local_preview.txt', { type: 'text/plain' });
+        const ok = await window.__reader.openLocalFile(f);
+        const c = document.querySelector('#content');
+        return {
+          ok,
+          ready: Boolean(window.__reader.ready),
+          errCards: c.querySelectorAll('.err-card').length,
+          codeBlocks: c.querySelectorAll('.code-block.file-code').length,
+          text: c.textContent || '',
+          crumb: (document.querySelector('#crumb') || {}).textContent || '',
+        };
+      })()
+    `);
+    assert.equal(webLocalRes.ok, true, 'Web File API openLocalFile must return true');
+    assert.equal(webLocalRes.ready, true, 'Web File API ready must be true');
+    assert.equal(webLocalRes.errCards, 0, 'Web File API must not render .err-card');
+    assert.equal(webLocalRes.codeBlocks, 1, 'Web File API must render 1 .code-block.file-code');
+    assert.ok(webLocalRes.text.includes('Web File API 本地预览内容'));
+    assert.ok(webLocalRes.crumb.includes('web_local_preview.txt'));
+    console.log('PASS [' + (PACKAGED ? 'packaged' : 'source') + '] Web File API local preview');
 
     assert.equal(pageExceptions.length, 0, 'no uncaught page exceptions: ' + pageExceptions.join('; '));
     assert.equal(consoleErrors.length, 0, 'no console errors: ' + consoleErrors.join('; '));

@@ -30,10 +30,10 @@
   - **Markdown (`.md`, `.markdown`)**: GitHub-flavored rendering (`marked`), syntax-highlighted code blocks with one-click copy (`highlight.js`), auto-generated table of contents, and clickable relative links between local files.
   - **PDF (`.pdf`)**: Built-in PDF viewer with layout-preserving bilingual translation powered by [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate) (`pdf2zh`), keeping formulas, charts, and tables intact. Independent iframes for **Original / Dual / Mono** modes preserve your scroll position when switching views.
   - **Office & Data**: `.docx` rendering (`mammoth`), multi-sheet `.xlsx` / `.xls` / `.csv` tables (`SheetJS`), and sanitized `.html` / `.htm`. (`.pptx` is recognized for download/external launch rather than inline preview.)
-  - **Code & Plain Text**: 40+ programming and config formats with automatic encoding detection (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE/BE`, `GBK`, `Latin1`, up to 32 MB).
-- **Rich Media & Video Integration**
+  - **Code, Configs & Special Files**: 45+ programming and config formats, plus dotfiles (`.gitignore`, `.env`, `.env.*`, `.editorconfig`, `.npmrc`, etc.) and extensionless project files (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `CHANGELOG`), with automatic encoding detection (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE/BE`, `GBK`, `Latin1`, up to 32 MB) and a unified format registry (`public/formats.js`) shared between the native file dialog, HTTP server, and renderer.
+- **Rich Media, Audio & Video Integration**
   - Resolves relative & remote images in Markdown with lazy loading and a full-screen **Lightbox** (zoom, pan, prev/next).
-  - Embeds local audio/video players with HTTP `206 Partial Content` (`Range`) seeking and playback-progress resume.
+  - Embeds local audio (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`) and video (`.mp4`, `.webm`, `.ogv`, `.mov`, `.m4v`, `.mkv`) players with HTTP `206 Partial Content` (`Range`) seeking and playback-progress resume.
   - Automatically converts **Bilibili (`BV...`)** and **YouTube** URLs in Markdown into embedded players.
 - **Bilingual Reading & Smart Dictionary**
   - Sentence-level inline translation with a 3-state toggle (**Bilingual / Translation Only / Off**) persisted across files across **19 languages**.
@@ -45,7 +45,8 @@
 - **Thoughtful Reading Experience**
   - **Non-Destructive Find (`Ctrl+F` / `F3`)**: Powered by the CSS Custom Highlight API (`CSS.highlights`), skipping translation blocks so layout, TTS highlights, and scroll state stay untouched.
   - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* & *Recent Folders* lists, Light/Dark themes, adjustable font sizes, and reading-width toggle.
-  - **Desktop Integration**: Single-instance window, drag-and-drop file opening, Windows *"Open with"* / CLI file arguments, and a virtual **"This PC"** drive browser in standalone Web mode.
+  - **Sidebar Discovery & Single-File Preview**: Sidebar toggles for **Hidden Items** (`.gitignore`, `.env`, etc.) and **Dependencies** (`node_modules`) with hidden-count indicators and explicit grayed-out rows for unreadable/broken-link entries. Top-bar **Open File** button opens the native dialog in Electron or previews local files directly in the browser via the HTML5 `File API` in Web mode.
+  - **Desktop Integration**: Single-instance window, drag-and-drop file opening, Windows *"Open with"* & Default Apps registration (without hijacking existing defaults), CLI file arguments, and a virtual **"This PC"** drive browser in standalone Web mode.
 
 ### Requirements
 
@@ -95,14 +96,16 @@ Outputs a standalone portable folder at `dist/FolioPrism-win32-x64/`. Copy the f
 
 ### Windows Installer
 
-`installer/FolioPrism.iss` builds an Inno Setup 6 installer from the same `dist/FolioPrism-win32-x64/` folder, so the setup and the portable zip ship identical files. Run `installer\生成安装包.bat` (it rebuilds `dist` first), or invoke `ISCC.exe installer\FolioPrism.iss` directly. The installer targets `%LOCALAPPDATA%\Programs\FolioPrism`, needs no admin rights, and deliberately leaves `%APPDATA%\FolioPrism` untouched on uninstall. Set the `ISCC` environment variable if Inno Setup lives somewhere other than the default path.
+`installer/FolioPrism.iss` builds an Inno Setup 6 installer from the same `dist/FolioPrism-win32-x64/` folder, so the setup and the portable zip ship identical files. Run `installer\生成安装包.bat` (it rebuilds `dist` first), or invoke `ISCC.exe installer\FolioPrism.iss` directly. The installer targets `%LOCALAPPDATA%\Programs\FolioPrism`, needs no admin rights, optionally registers FolioPrism in Windows **"Open with"** (`OpenWithProgids`) and **Default Apps** (`RegisteredApplications`) under `HKCU` without overwriting your current default programs, and deliberately leaves `%APPDATA%\FolioPrism` untouched on uninstall. Set the `ISCC` environment variable if Inno Setup lives somewhere other than the default path.
 
 ### Tests
 
 ```bash
-npm test            # unit tests: TTS streaming, chunking, state machine, Web Audio player
-npm run test:e2e    # real browser + real Edge TTS latency check (needs network & Chrome/Edge)
+npm test                # unit tests: TTS streaming/chunking, text/code rendering, unified format registry & browse/read boundaries
+npm run test:open       # Electron CDP smoke test for opening multi-encoding text, code, dotfiles, extensionless, audio & Web File API
+npm run test:e2e        # real browser + real Edge TTS latency check (needs network & Chrome/Edge)
 npm run test:packaged   # smoke-test the built dist/ exe (run npm run dist first)
+npm run verify:dist     # release gate check: version sync, app.asar SHA256 parity, filter coverage & SHA256SUMS
 ```
 
 `npm test` is self-contained. `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
@@ -132,6 +135,7 @@ server.js           Zero-dependency HTTP server: file browsing, smart encoding, 
 translator.js       Text/PDF translation, hover dictionary, Edge TTS, cache pruning, uv installer
 public/
   index.html        App shell & translation/TTS/find UI
+  formats.js        Shared UMD format registry (extensions, dotfiles, extensionless names, dialog filters)
   app.js            Renderers (Markdown/HTML/DOCX/XLSX/PDF/Media), bilingual engine, TTS, Lightbox
   style.css         Light/dark themes & responsive reader styling
   vendor/           Local browser libraries generated by `npm run setup`
@@ -193,10 +197,10 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
   - **Markdown（`.md` / `.markdown`）**：支持 GFM 排版（`marked`）、代码语法高亮与一键复制（`highlight.js`）、自动生成右侧大纲目录，以及文档间相对路径跳转。
   - **PDF（`.pdf`）**：内置阅读器并集成开源项目 [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate)（`pdf2zh`），生成保留原版排版的双语 / 纯译文 PDF，公式、图表、表格留在原位；**原文 / 双语 / 译文**各自独立使用 `<iframe>`，切换视图不会跳回首页，刷新后也能接回后台翻译进度。
   - **Office 与网页**：支持 `.docx` 解析（`mammoth`）、多工作表 `.xlsx` / `.xls` / `.csv` 表格预览（`SheetJS`）以及消毒后的 `.html` / `.htm`。（`.pptx` 识别后提供下载与路径复制卡片，不做内联渲染。）
-  - **代码与纯文本**：支持 40+ 种编程语言与配置文件（单文件上限 32 MB），自动识别 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE/BE`、`GBK`、`Latin1` 编码，解决 Windows 中文文本乱码问题。
-- **富媒体与视频嵌入**
+  - **代码、配置与特殊文件**：通过前后端共享的统一格式注册表（`public/formats.js`）支持 45+ 种编程语言与配置文件、常见点文件（`.gitignore`、`.env`、`.env.*`、`.editorconfig`、`.npmrc` 等）以及无扩展名工程文件（`Makefile`、`Dockerfile`、`LICENSE`、`README`、`CHANGELOG`），单文件上限 32 MB，自动识别 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE/BE`、`GBK`、`Latin1` 编码，彻底对齐原生文件选择框筛选器与渲染器。
+- **富媒体、音频与视频嵌入**
   - 自动解析 Markdown 中的相对路径图片、远程图片及本地图片兜底目录，支持懒加载与全屏**图片灯箱**（缩放、拖拽、上下张切换）。
-  - 支持本地音视频内嵌播放，服务端完整实现 HTTP `206 Partial Content`（`Range`）分片拖拽，并记住本地视频播放进度。
+  - 支持本地音频（`.mp3`、`.wav`、`.m4a`、`.flac`、`.ogg`）与视频（`.mp4`、`.webm`、`.ogv`、`.mov`、`.m4v`、`.mkv`）内嵌播放，服务端完整实现 HTTP `206 Partial Content`（`Range`）分片拖拽，并记住本地视频播放进度。
   - 自动将 Markdown 中的 **Bilibili（`BV...`）** 与 **YouTube** 视频链接转换为内嵌播放器。
 - **双语精读与悬停查词**
   - **逐句双语对照**：支持 **19 种语言**，提供「双语 / 仅译文 / 关闭」三态一键切换，偏好跨文件自动记忆。
@@ -208,7 +212,8 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
 - **沉浸式阅读辅助**
   - **无损文档内查找（`Ctrl+F` / `F3`）**：基于 `CSS Custom Highlight API`（`CSS.highlights`）实现，不修改 DOM 结构，不破坏双语排版与朗读高亮，自动跳过译文块。
   - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 与 *最近文件夹* 列表、明暗主题切换、字号与阅读宽度调节。
-  - **桌面与 Web 双栖**：支持单实例运行、拖放文件打开、Windows「打开方式 / 命令行传参」直接打开；纯浏览器模式下提供虚拟「此电脑」全盘浏览入口。
+  - **侧栏文件发现与单文件预览**：侧栏提供**隐藏项**（`.gitignore`、`.env` 等）与**依赖目录**（`node_modules`）独立开关及隐藏计数提示，对无权限或断开符号链接项以灰显占位行展示原因；顶栏提供**打开文件**按钮，桌面版调起同步当前目录的原生文件选择框，纯浏览器 Web 模式直接基于浏览器 `File API` 本地预览单文件。
+  - **桌面与 Web 双栖**：支持单实例运行、拖放文件打开、Windows「打开方式 / 默认应用列表 / 命令行传参」直接打开（安装包可选注册 `HKCU` 文件关联而不强行篡改现有默认程序）；纯浏览器模式下提供虚拟「此电脑」全盘浏览入口。
 
 ### 环境要求
 
@@ -258,14 +263,16 @@ npm run dist
 
 ### 构建 Windows 安装包
 
-`installer/FolioPrism.iss` 用同一份 `dist/FolioPrism-win32-x64/` 产出 Inno Setup 6 安装包，因此安装版与绿色版内容完全一致。直接运行 `installer\生成安装包.bat`（会先重新打包 `dist`），或手动执行 `ISCC.exe installer\FolioPrism.iss`。安装包按当前用户装到 `%LOCALAPPDATA%\Programs\FolioPrism`，不弹 UAC；卸载时刻意保留 `%APPDATA%\FolioPrism` 里的阅读进度与设置。Inno Setup 不在默认路径时，用环境变量 `ISCC` 指定。
+`installer/FolioPrism.iss` 用同一份 `dist/FolioPrism-win32-x64/` 产出 Inno Setup 6 安装包，因此安装版与绿色版内容完全一致。直接运行 `installer\生成安装包.bat`（会先重新打包 `dist`），或手动执行 `ISCC.exe installer\FolioPrism.iss`。安装包按当前用户装到 `%LOCALAPPDATA%\Programs\FolioPrism`，不弹 UAC；可选将 FolioPrism 注册到 Windows「打开方式」（`OpenWithProgids`）与「默认应用」列表（`RegisteredApplications`），不强行覆盖现有默认程序；卸载时刻意保留 `%APPDATA%\FolioPrism` 里的阅读进度与设置。Inno Setup 不在默认路径时，用环境变量 `ISCC` 指定。
 
 ### 测试
 
 ```bash
-npm test                # 单元测试：流式合成、分块、前端状态机、Web Audio 播放器
+npm test                # 单元测试：流式合成、分块、文本渲染、统一格式注册表与目录/读取边界
+npm run test:open       # Electron CDP 文件打开冒烟测试（多编码文本、代码、点文件、无扩展名、音频、Web 本地文件）
 npm run test:e2e        # 真实浏览器 + 真实 Edge TTS 延迟实测（需联网与 Chrome/Edge）
 npm run test:packaged   # 对 dist 产物做冒烟测试（先 npm run dist）
+npm run verify:dist     # 发布产物门禁校验（版本同步、app.asar 哈希一致性、筛选器全覆盖与 SHA256SUMS）
 ```
 
 `npm test` 不依赖网络。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
@@ -295,6 +302,7 @@ server.js           零依赖本地 HTTP 服务：目录浏览、编码识别、
 translator.js       文本/PDF 翻译、悬停查词、Edge TTS 合成、缓存清理、uv 一键安装
 public/
   index.html        前端骨架与翻译/朗读/查找面板
+  formats.js        前后端共享的统一格式注册表（UMD）
   app.js            多格式渲染、双语引擎、TTS 控制、灯箱与阅读辅助逻辑
   style.css         明暗主题与排版样式
   vendor/           由 `npm run setup` 生成的本地浏览器依赖
