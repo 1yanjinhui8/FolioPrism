@@ -18,32 +18,33 @@
   }
   function escapeAttr(s) { return escapeHtml(s); }
 
+  const formats = window.FolioFormats;
+  if (!formats) {
+    throw new Error('FolioFormats 未加载：请确认 public/formats.js 已在 public/app.js 之前引入');
+  }
+
   function extOf(p) {
-    const m = /\.([A-Za-z0-9]+)$/.exec(String(p || ''));
-    return m ? m[1].toLowerCase() : '';
+    return formats.extOf(p);
   }
   function baseName(p) {
-    return String(p || '').split(/[\\/]/).pop();
+    return formats.baseNameOf(p);
   }
   function dirOf(p) {
-    const s = String(p || '');
-    const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
-    return i > 0 ? s.slice(0, i) : s;
+    return formats.dirOf(p);
+  }
+  function kindOf(p) {
+    return formats.kindOf(p);
   }
   function joinPath(dir, name) {
     return String(dir).replace(/[\\/]+$/, '') + '\\' + name;
   }
 
-  const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'];
-  const VIDEO_EXT = ['mp4', 'webm', 'ogg', 'mov', 'm4v'];
-  const DOCX_EXT = ['docx'];
-  const SHEET_EXT = ['xlsx', 'xls', 'csv'];
-  const TEXT_EXT = [
-    'txt', 'log', 'md', 'markdown', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cc',
-    'cpp', 'h', 'hpp', 'cs', 'go', 'rs', 'php', 'rb', 'sh', 'bat', 'ps1', 'css', 'scss', 'less',
-    'json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'xml', 'sql', 'vue', 'svelte', 'swift', 'kt', 'm',
-    'mm', 'gradle', 'properties', 'env', 'gitignore', 'csv', 'tsv', 'r', 'lua', 'dart', 'pl', 'makefile'
-  ];
+  const IMAGE_EXT = formats.IMAGE_EXT;
+  const VIDEO_EXT = formats.VIDEO_EXT;
+  const AUDIO_EXT = formats.AUDIO_EXT;
+  const DOCX_EXT = formats.DOCX_EXT;
+  const SHEET_EXT = formats.SHEET_EXT;
+  const TEXT_EXT = formats.TEXT_EXT;
 
   /* ------------------------------------------------------------ 第三方库 */
 
@@ -225,7 +226,11 @@
     tx: 0,
     ty: 0,
     translatable: false,
-    docLang: ''
+    docLang: '',
+    showHidden: false,
+    showDeps: false,
+    activeBlobUrl: '',
+    isWebLocalFile: false
   };
 
   const LS = {
@@ -240,11 +245,35 @@
     expanded: 'media-reader/expandedDirs',
     bilingual: 'media-reader/bilingualMode',
     continueFiles: 'media-reader/continueFiles',
-    video: 'media-reader/videoProgress'
+    video: 'media-reader/videoProgress',
+    showHidden: 'media-reader/showHidden',
+    showDeps: 'media-reader/showDeps'
   };
 
   /** 每次 openFile 自增；异步渲染回来时用它判断自己是否已经过期 */
   let openSeq = 0;
+
+  function revokeActiveBlobUrl() {
+    if (state.activeBlobUrl) {
+      try {
+        if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(state.activeBlobUrl);
+        }
+      } catch (_) { /* ignore */ }
+      state.activeBlobUrl = '';
+    }
+  }
+
+  function cleanupActiveMedia() {
+    $$('#content video, #content audio').forEach((m) => {
+      try {
+        if (typeof m.pause === 'function') m.pause();
+        m.removeAttribute('src');
+        if (typeof m.load === 'function') m.load();
+      } catch (_) { /* ignore */ }
+    });
+    revokeActiveBlobUrl();
+  }
 
   /* ---------------------------------------------------- 阅读位置记忆 / 相对路径 */
 
@@ -410,10 +439,18 @@
       throw err;
     }
     if (!res.ok) {
+      let data = null;
       let detail = '';
-      try { detail = JSON.stringify(await res.json()); } catch (_) { /* ignore */ }
-      const err = new Error('HTTP ' + res.status + (detail ? ' ' + detail : ''));
+      try {
+        data = await res.json();
+        detail = JSON.stringify(data);
+      } catch (_) { /* ignore */ }
+      const err = new Error(
+        (data && data.error) ? data.error : ('HTTP ' + res.status + (detail ? ' ' + detail : ''))
+      );
       err.status = res.status;
+      err.code = (data && data.code) || '';
+      err.data = data;
       err.requestUrl = u.toString();
       throw err;
     }
@@ -465,11 +502,13 @@
   const DRIVES = '__DRIVES__';
 
   function iconFor(ent) {
+    if (ent.unreadable) return '⚠';
     if (ent.isDir) return '▸';
-    const e = ent.ext;
+    const e = ent.ext || extOf(ent.name);
     if (e === 'md' || e === 'markdown') return '📄';
     if (IMAGE_EXT.indexOf(e) >= 0) return '🖼';
     if (VIDEO_EXT.indexOf(e) >= 0) return '🎬';
+    if (AUDIO_EXT.indexOf(e) >= 0) return '🎵';
     if (e === 'pdf') return '📕';
     if (SHEET_EXT.indexOf(e) >= 0) return '📊';
     if (DOCX_EXT.indexOf(e) >= 0) return '📘';
@@ -478,18 +517,47 @@
     return '📦';
   }
 
+  function browseParams(dir) {
+    return {
+      path: dir,
+      hidden: state.showHidden ? '1' : '0',
+      deps: state.showDeps ? '1' : '0',
+    };
+  }
+
+  function updateTreeFilterHint(hiddenCount, depsHiddenCount, isDrives) {
+    const box = $('#tree-filter-hint');
+    if (!box) return;
+    if (isDrives) {
+      box.hidden = true;
+      box.textContent = '';
+      return;
+    }
+    const parts = [];
+    if (!state.showHidden && hiddenCount > 0) parts.push(hiddenCount + ' 个隐藏项');
+    if (!state.showDeps && depsHiddenCount > 0) parts.push(depsHiddenCount + ' 个依赖目录');
+    if (!parts.length) {
+      box.hidden = true;
+      box.textContent = '';
+      return;
+    }
+    box.hidden = false;
+    box.textContent = '已隐藏 ' + parts.join('、');
+  }
+
   function makeRow(ent, parentDir) {
     const full = ent.path || joinPath(parentDir, ent.name);
     const wrap = document.createElement('div');
     const row = document.createElement('div');
+    const resolvedExt = ent.isDir ? '' : (ent.ext || extOf(ent.name));
     row.className = 'tree-row ' + (ent.isDir ? 'tree-dir' : 'tree-file');
     row.dataset.path = full;
-    row.dataset.ext = ent.isDir ? '' : ent.ext;
+    row.dataset.ext = resolvedExt;
     row.title = full;
 
     const caret = document.createElement('span');
     caret.className = 'tree-caret';
-    caret.textContent = ent.isDir ? '▶' : '';
+    caret.textContent = ent.isDir && !ent.unreadable ? '▶' : '';
 
     const ico = document.createElement('span');
     ico.className = 'tree-ico';
@@ -503,6 +571,17 @@
     row.appendChild(ico);
     row.appendChild(name);
     wrap.appendChild(row);
+
+    if (ent.unreadable) {
+      row.classList.add('tree-unreadable');
+      const reason = ent.error ? String(ent.error) : '不可访问';
+      row.title = full + '（不可读取：' + reason + '）';
+      const badge = document.createElement('span');
+      badge.className = 'tree-unreadable-tag';
+      badge.textContent = reason;
+      row.appendChild(badge);
+      return wrap;
+    }
 
     if (ent.isDir) {
       let children = null;
@@ -543,11 +622,13 @@
 
       row.addEventListener('click', () => setOpen(!open, true));
 
-      // 自动展开：记住过的目录，以及当前打开文件的所有上级目录
+      // 自动展开：记住过的目录，以及当前打开文件的所有上级目录（盘根目录 D:\ 去重末尾斜杠）
+      const normFull = String(full).replace(/[\\/]+$/, '');
+      const ancestorPrefix = (normFull + '\\').toLowerCase();
       const isAncestor =
         state.currentFile &&
         state.currentFile !== full &&
-        String(state.currentFile).toLowerCase().startsWith((full + '\\').toLowerCase());
+        String(state.currentFile).replace(/\//g, '\\').toLowerCase().startsWith(ancestorPrefix);
       if (readExpanded().indexOf(full) >= 0 || isAncestor) setOpen(true, false);
     } else {
       row.addEventListener('click', () => openFile(full));
@@ -557,7 +638,7 @@
 
   async function fillChildren(dir, container) {
     try {
-      const data = await api('/api/browse', { path: dir });
+      const data = await api('/api/browse', browseParams(dir));
       container.innerHTML = '';
       if (!data.entries.length) {
         container.innerHTML = '<div class="tree-empty">空目录</div>';
@@ -585,40 +666,58 @@
     return row;
   }
 
+  function syncRootState(dir) {
+    state.root = dir;
+    const input = $('#root-input');
+    if (input) input.value = dir === DRIVES ? '' : (dir || '');
+    if (dir && dir !== DRIVES) {
+      try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
+      if (window.readerNative && typeof window.readerNative.setCurrentRoot === 'function') {
+        try { window.readerNative.setCurrentRoot(dir); } catch (_) { /* ignore */ }
+      }
+    }
+  }
+
   async function loadTree(dir) {
     const tree = $('#tree');
-    $('#root-input').value = dir === DRIVES ? '' : dir;
+    syncRootState(dir);
     tree.innerHTML = '<div class="tree-loading">正在读取目录…</div>';
     try {
-      const data = await api('/api/browse', { path: dir });
+      const data = await api('/api/browse', browseParams(dir));
       tree.innerHTML = '';
+      updateTreeFilterHint(data.hiddenCount || 0, data.depsHiddenCount || 0, dir === DRIVES);
 
       if (dir !== DRIVES) {
-        tree.appendChild(makeNavRow('💻', '此电脑', () => loadTree(DRIVES)));
+        tree.appendChild(makeNavRow('💻', '此电脑', () => setRoot(DRIVES)));
       }
       if (data.parent) {
-        tree.appendChild(makeNavRow('⬆', '上一级', () => loadTree(data.parent)));
+        tree.appendChild(makeNavRow('⬆', '上一级', () => setRoot(data.parent)));
       }
 
       if (!data.entries.length) {
         const empty = document.createElement('div');
         empty.className = 'tree-empty';
-        empty.textContent = '空目录';
+        const hasFilteredOut =
+          (!state.showHidden && (data.hiddenCount || 0) > 0) ||
+          (!state.showDeps && (data.depsHiddenCount || 0) > 0);
+        empty.textContent = hasFilteredOut ? '当前目录仅有隐藏项（可点击上方开关显示）' : '空目录';
         tree.appendChild(empty);
         return;
       }
       data.entries.forEach((ent) => tree.appendChild(makeRow(ent, dir)));
     } catch (e) {
+      updateTreeFilterHint(0, 0, true);
       tree.innerHTML = '<div class="tree-empty">无法读取此目录</div>';
       toast('目录读取失败：' + e.message, 'err');
     }
   }
 
   function markActive(filePath) {
-    $$('#tree .tree-row').forEach((r) => r.classList.toggle('active', r.dataset.path === filePath));
+    $$('#tree .tree-row').forEach((r) => r.classList.toggle('active', Boolean(filePath) && r.dataset.path === filePath));
   }
 
   function pushRecent(dir) {
+    if (!dir || dir === DRIVES) return;
     let list = [];
     try { list = JSON.parse(localStorage.getItem(LS.recent) || '[]'); } catch (_) { list = []; }
     list = list.filter((d) => d !== dir);
@@ -644,10 +743,7 @@
       b.textContent = d;
       b.title = d;
       b.addEventListener('click', () => {
-        $('#root-input').value = d;
-        state.root = d;
-        localStorage.setItem(LS.lastRoot, d);
-        loadTree(d);
+        setRoot(d);
       });
       box.appendChild(b);
     });
@@ -805,18 +901,27 @@
 
     document.addEventListener('error', (e) => {
       const v = e.target;
-      if (!v || v.tagName !== 'VIDEO') return;
-      const frame = v.closest('.video-frame');
-      if (!frame || frame.querySelector('.media-error')) return;
-      const box = document.createElement('div');
-      box.className = 'media-error';
-      box.textContent = '视频无法播放：文件可能损坏，或编码不受支持（可尝试转码为 H.264 MP4）。';
-      frame.appendChild(box);
+      if (!v) return;
+      if (v.tagName === 'VIDEO') {
+        const frame = v.closest('.video-frame');
+        if (!frame || frame.querySelector('.media-error')) return;
+        const box = document.createElement('div');
+        box.className = 'media-error';
+        box.textContent = '视频无法播放：文件可能损坏，或编码不受支持（可尝试转码为 H.264 MP4）。';
+        frame.appendChild(box);
+      } else if (v.tagName === 'AUDIO') {
+        const frame = v.closest('.audio-frame');
+        if (!frame || frame.querySelector('.media-error')) return;
+        const box = document.createElement('div');
+        box.className = 'media-error';
+        box.textContent = '音频无法播放：文件可能损坏，或编码不受当前浏览器支持。';
+        frame.appendChild(box);
+      }
     }, true);
   }
 
   /* ==========================================================================
-     需求 2：按扩展名分流渲染
+     需求 2：按扩展名分流渲染（含 Web 模式本地 File API 预览）
      ========================================================================== */
 
   /**
@@ -828,10 +933,7 @@
     if (!p) return Promise.resolve(false);
     const dir = dirOf(p);
     if (dir && dir !== state.root) {
-      state.root = dir;
-      $('#root-input').value = dir;
-      try { localStorage.setItem(LS.lastRoot, dir); } catch (_) { /* ignore */ }
-      loadTree(dir);
+      setRoot(dir);
     }
     return openFile(p);
   }
@@ -841,11 +943,15 @@
     // 新文件的内容/state 覆盖掉，出现正文和面包屑串台
     const seq = ++openSeq;
     // 切换文件前先记住上一个文件读到哪，回来时直接落回原处
-    if (state.currentFile && state.currentFile !== filePath) saveScroll(state.currentFile);
+    if (state.currentFile && !state.isWebLocalFile && state.currentFile !== filePath) {
+      saveScroll(state.currentFile);
+    }
     stopTts();
     resetBilingual();
+    cleanupActiveMedia();
     state.translatable = false;
     state.docLang = '';
+    state.isWebLocalFile = false;
     state.currentFile = filePath;
     setCrumb(filePath);
     markActive(filePath);
@@ -861,33 +967,41 @@
     c.innerHTML = '<div class="welcome"><h1>正在载入…</h1></div>';
 
     const ext = extOf(filePath);
+    const kind = kindOf(filePath);
     let ok = true;
     try {
-      if (ext === 'md' || ext === 'markdown') {
+      if (kind === 'markdown') {
         await renderMarkdown(filePath, seq);
-      } else if (ext === 'html' || ext === 'htm') {
+      } else if (kind === 'html') {
         await renderHtml(filePath, seq);
-      } else if (DOCX_EXT.indexOf(ext) >= 0) {
+      } else if (kind === 'docx') {
         await renderDocx(filePath, seq);
-      } else if (SHEET_EXT.indexOf(ext) >= 0) {
+      } else if (kind === 'sheet') {
         await renderSheet(filePath, seq);
-      } else if (ext === 'pptx') {
+      } else if (kind === 'pptx') {
         renderUnsupported(filePath, 'PPT 暂不支持内联预览', 'PPTX 是二进制压缩包格式，浏览器端没有可靠且轻量的渲染方案，因此这里不做内联预览。');
-      } else if (ext === 'pdf') {
+      } else if (kind === 'pdf') {
         renderPdf(filePath);
-      } else if (IMAGE_EXT.indexOf(ext) >= 0) {
+      } else if (kind === 'image') {
         renderImageFile(filePath);
-      } else if (VIDEO_EXT.indexOf(ext) >= 0) {
+      } else if (kind === 'video') {
         renderVideoFile(filePath);
-      } else if (TEXT_EXT.indexOf(ext) >= 0) {
+      } else if (kind === 'audio') {
+        renderAudioFile(filePath);
+      } else if (kind === 'text') {
         await renderTextFile(filePath, seq);
       } else {
-        renderUnsupported(filePath, '暂不支持预览此格式', '无法识别的文件类型：.' + (ext || '(无扩展名)') + '。你可以下载后使用其他程序打开。');
+        renderUnsupported(filePath, '暂不支持预览此格式', '无法识别的文件类型：' + (ext ? '.' + ext : (baseName(filePath) || '(无扩展名)')) + '。你可以下载后使用其他程序打开。');
       }
     } catch (e) {
       if (seq !== openSeq) return false;
-      renderError(e, filePath);
-      ok = false;
+      if (e && (e.status === 413 || e.code === 'too-large')) {
+        renderTooLarge(filePath, e);
+        ok = false;
+      } else {
+        renderError(e, filePath);
+        ok = false;
+      }
     }
 
     if (seq !== openSeq) return false;
@@ -921,6 +1035,147 @@
     return ok;
   }
 
+  /**
+   * 浏览器本地 File API 智能编码读取（与服务端 readTextSmart 对齐 UTF-8 / BOM / UTF-16 LE/BE / GBK）
+   */
+  async function readLocalFileTextSmart(fileObj) {
+    const maxBytes = 32 * 1024 * 1024;
+    const size = typeof fileObj.size === 'number' ? fileObj.size : 0;
+    if (size > maxBytes) {
+      const err = new Error('文件过大，暂不支持内联预览（上限 32 MB）');
+      err.status = 413;
+      err.code = 'too-large';
+      throw err;
+    }
+    const ab = await fileObj.arrayBuffer();
+    const buf = new Uint8Array(ab);
+    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+      return { text: new TextDecoder('utf-8').decode(buf.subarray(3)), encoding: 'utf-8-bom', size: buf.length };
+    }
+    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+      return { text: new TextDecoder('utf-16le').decode(buf.subarray(2)), encoding: 'utf-16le', size: buf.length };
+    }
+    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+      return { text: new TextDecoder('utf-16be').decode(buf.subarray(2)), encoding: 'utf-16be', size: buf.length };
+    }
+    try {
+      return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), encoding: 'utf-8', size: buf.length };
+    } catch (_) {
+      try {
+        return { text: new TextDecoder('gbk').decode(buf), encoding: 'gbk', size: buf.length };
+      } catch (_) {
+        let s = '';
+        for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+        return { text: s, encoding: 'latin1', size: buf.length };
+      }
+    }
+  }
+
+  /**
+   * 纯浏览器模式（Web 模式）下通过 <input type="file"> 或拖入 File 对象直接本地预览
+   */
+  async function openWebLocalFile(file) {
+    if (!file || typeof file.name !== 'string') return false;
+    const seq = ++openSeq;
+    if (state.currentFile && !state.isWebLocalFile) {
+      saveScroll(state.currentFile);
+    }
+    stopTts();
+    resetBilingual();
+    cleanupActiveMedia();
+    state.translatable = false;
+    state.docLang = '';
+    state.isWebLocalFile = true;
+    const fileName = file.name;
+    state.currentFile = fileName;
+
+    const crumb = $('#crumb');
+    if (crumb) {
+      crumb.innerHTML =
+        '<span class="crumb-cur">' + escapeHtml(fileName) + '</span>' +
+        '<span class="crumb-dir"> — 浏览器本地文件预览</span>';
+      crumb.title = fileName;
+    }
+    markActive('');
+    clearFind(true);
+    document.body.classList.remove('sidebar-open');
+
+    window.__reader.ready = false;
+    window.__reader.stats = null;
+
+    const c = $('#content');
+    c.innerHTML = '<div class="welcome"><h1>正在载入…</h1></div>';
+
+    const ext = extOf(fileName);
+    const kind = kindOf(fileName);
+    let ok = true;
+    try {
+      if (kind === 'markdown') {
+        await ensureLib(['marked', 'hljs', 'dompurify']);
+        const info = await readLocalFileTextSmart(file);
+        if (seq !== openSeq) return false;
+        renderMarkdownFromData({ path: fileName, size: info.size, encoding: info.encoding, text: info.text }, '', true);
+      } else if (kind === 'html') {
+        await ensureLib(['hljs', 'dompurify']);
+        const info = await readLocalFileTextSmart(file);
+        if (seq !== openSeq) return false;
+        renderHtmlFromData({ path: fileName, size: info.size, encoding: info.encoding, text: info.text }, '', true);
+      } else if (kind === 'text') {
+        const info = await readLocalFileTextSmart(file);
+        if (seq !== openSeq) return false;
+        renderTextFromData({ path: fileName, size: info.size, encoding: info.encoding, text: info.text }, fileName);
+      } else if (kind === 'docx') {
+        await ensureLib(['mammoth', 'dompurify']);
+        const buf = await file.arrayBuffer();
+        if (seq !== openSeq) return false;
+        await renderDocxBuffer(buf, fileName, seq, true);
+      } else if (kind === 'sheet') {
+        await ensureLib(['XLSX']);
+        const buf = await file.arrayBuffer();
+        if (seq !== openSeq) return false;
+        renderSheetBuffer(buf, fileName);
+      } else if (kind === 'image') {
+        const blobUrl = URL.createObjectURL(file);
+        state.activeBlobUrl = blobUrl;
+        renderImageFile(fileName, blobUrl, fileName + ' · ' + (file.size || 0) + ' 字节 · 浏览器本地预览');
+      } else if (kind === 'video') {
+        const blobUrl = URL.createObjectURL(file);
+        state.activeBlobUrl = blobUrl;
+        renderVideoFile(fileName, blobUrl, fileName + ' · ' + (file.size || 0) + ' 字节 · 浏览器本地预览');
+      } else if (kind === 'audio') {
+        const blobUrl = URL.createObjectURL(file);
+        state.activeBlobUrl = blobUrl;
+        renderAudioFile(fileName, blobUrl, fileName + ' · ' + (file.size || 0) + ' 字节 · 浏览器本地预览');
+      } else if (kind === 'pdf') {
+        const blobUrl = URL.createObjectURL(file);
+        state.activeBlobUrl = blobUrl;
+        renderLocalPdfBlob(fileName, blobUrl);
+      } else if (kind === 'pptx') {
+        renderUnsupported(fileName, 'PPT 暂不支持内联预览', 'PPTX 是二进制压缩包格式，浏览器端没有可靠且轻量的渲染方案，因此这里不做内联预览。', true);
+      } else {
+        renderUnsupported(fileName, '暂不支持预览此格式', '无法识别的文件类型：' + (ext ? '.' + ext : (fileName || '(无扩展名)')) + '。', true);
+      }
+    } catch (e) {
+      if (seq !== openSeq) return false;
+      if (e && (e.status === 413 || e.code === 'too-large')) {
+        renderTooLarge(fileName, e, true);
+        ok = false;
+      } else {
+        renderError(e, fileName, () => openWebLocalFile(file));
+        ok = false;
+      }
+    }
+
+    if (seq !== openSeq) return false;
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    await settleImages();
+    if (seq !== openSeq) return false;
+    updateStats();
+    updateProgress();
+    window.__reader.ready = true;
+    return ok;
+  }
+
   function setCrumb(filePath) {
     const crumb = $('#crumb');
     crumb.innerHTML = '<span class="crumb-cur">' + escapeHtml(baseName(filePath)) + '</span>' +
@@ -930,12 +1185,7 @@
 
   /* ---------------------------------------------------------------- Markdown */
 
-  async function renderMarkdown(filePath, seq) {
-    await ensureLib(['marked', 'hljs', 'dompurify']);
-    if (seq !== openSeq) return;
-    const data = await api('/api/read', { path: filePath });
-    if (seq !== openSeq) return;
-
+  function renderMarkdownFromData(data, filePath, isLocalPreview) {
     const parse = lib.marked ? (lib.marked.parse || lib.marked) : null;
     let html = null;
     if (parse) {
@@ -948,7 +1198,11 @@
     }
 
     const c = $('#content');
-    c.innerHTML = '<div class="doc-meta">' + escapeHtml(data.path) + ' · ' + data.size + ' 字节</div>' +
+    const metaLabel =
+      escapeHtml(data.path) + ' · ' + data.size + ' 字节' +
+      (data.encoding ? ' · ' + escapeHtml(data.encoding) : '') +
+      (isLocalPreview ? ' · 浏览器本地预览' : '');
+    c.innerHTML = '<div class="doc-meta">' + metaLabel + '</div>' +
       (html != null ? html : '<pre><code>' + escapeHtml(data.text) + '</code></pre>');
 
     rewriteImages(filePath);
@@ -958,7 +1212,15 @@
     buildToc();
     enhanceTts();
     state.translatable = true;
-    detectDocLanguage(data.text, filePath);
+    detectDocLanguage(data.text, filePath || data.path);
+  }
+
+  async function renderMarkdown(filePath, seq) {
+    await ensureLib(['marked', 'hljs', 'dompurify']);
+    if (seq !== openSeq) return;
+    const data = await api('/api/read', { path: filePath });
+    if (seq !== openSeq) return;
+    renderMarkdownFromData(data, filePath, false);
   }
 
   /* ---------------------------------------------------------------- HTML */
@@ -967,11 +1229,7 @@
    * 本地 HTML 文档按「阅读模式」渲染：去掉脚本和样式，保留正文，
    * 这样也能用同一套双语对照。
    */
-  async function renderHtml(filePath, seq) {
-    await ensureLib(['hljs', 'dompurify']);
-    if (seq !== openSeq) return;
-    const data = await api('/api/read', { path: filePath });
-    if (seq !== openSeq) return;
+  function renderHtmlFromData(data, filePath, isLocalPreview) {
     const doc = new DOMParser().parseFromString(data.text, 'text/html');
 
     // 1) 去掉会执行代码或改变布局的标签
@@ -1029,8 +1287,12 @@
     // 前面的“删标签”不是消毒：style、srcset、data: 图片、远程追踪像素都还在。
     // 统一再走一次白名单，保证 HTML 文档和 Markdown 的信任边界一致。
     const safeBody = sanitizeHtml(body.innerHTML);
+    const metaLabel =
+      escapeHtml(data.path) + ' · ' + data.size + ' 字节' +
+      (data.encoding ? ' · ' + escapeHtml(data.encoding) : '') +
+      (isLocalPreview ? ' · 浏览器本地预览' : '');
     c.innerHTML =
-      '<div class="doc-meta">' + escapeHtml(data.path) + ' · ' + data.size + ' 字节</div>' +
+      '<div class="doc-meta">' + metaLabel + '</div>' +
       (title && !hasH1 ? '<h1 class="html-title">' + escapeHtml(title) + '</h1>' : '') +
       safeBody;
 
@@ -1040,7 +1302,15 @@
     buildToc();
     enhanceTts();
     state.translatable = true;
-    detectDocLanguage(body.textContent, filePath);
+    detectDocLanguage(body.textContent, filePath || data.path);
+  }
+
+  async function renderHtml(filePath, seq) {
+    await ensureLib(['hljs', 'dompurify']);
+    if (seq !== openSeq) return;
+    const data = await api('/api/read', { path: filePath });
+    if (seq !== openSeq) return;
+    renderHtmlFromData(data, filePath, false);
   }
 
   /**
@@ -1328,11 +1598,10 @@
 
   /* ---------------------------------------------------------------- 文本 / 代码文件 */
 
-  async function renderTextFile(filePath, seq) {
-    const data = await api('/api/read', { path: filePath });
-    if (seq !== openSeq) return;
+  function renderTextFromData(data, filePath) {
     const lang = extOf(filePath) || 'text';
-    const isPlain = /^(txt|log|text|plaintext)$/i.test(lang);
+    const hljsLang = formats.hljsLangFor(filePath);
+    const isPlain = !hljsLang;
 
     const c = $('#content');
     c.innerHTML =
@@ -1348,8 +1617,8 @@
 
     const hljs = lib.hljs || (lib.hljs = grabLib('hljs'));
     if (!isPlain && hljs) {
-      if (!hljs.getLanguage || hljs.getLanguage(lang)) {
-        code.className = 'language-' + lang;
+      if (!hljs.getLanguage || hljs.getLanguage(hljsLang)) {
+        code.className = 'language-' + hljsLang;
         try { hljs.highlightElement(code); } catch (_) { /* ignore */ }
       } else {
         code.className = 'language-plaintext';
@@ -1365,6 +1634,12 @@
     wrap.classList.add('file-code');
     c.appendChild(wrap);
     $('#toc').innerHTML = '';
+  }
+
+  async function renderTextFile(filePath, seq) {
+    const data = await api('/api/read', { path: filePath });
+    if (seq !== openSeq) return;
+    renderTextFromData(data, filePath);
   }
 
   /* ---------------------------------------------------------------- PDF */
@@ -1646,7 +1921,45 @@
       .catch(() => { /* 查不到状态不影响阅读 */ });
   }
 
+  function renderLocalPdfBlob(fileName, blobUrl) {
+    const c = $('#content');
+    const wrap = document.createElement('div');
+    wrap.className = 'pdf-wrap';
+    wrap.innerHTML =
+      '<div class="pdf-bar">' +
+      '<span class="pdf-name">' + escapeHtml(fileName) + '（浏览器本地预览）</span>' +
+      '<div class="pdf-actions">' +
+      '<span class="muted">本地预览模式（使用服务端双语翻译请从左侧目录树打开）</span>' +
+      '</div></div>' +
+      '<div class="pdf-frames" id="pdf-frames">' +
+      '<iframe class="pdf-frame active" data-frame="src" src="' + escapeAttr(blobUrl) + '"></iframe>' +
+      '</div>';
+    c.innerHTML = '';
+    c.appendChild(wrap);
+    $('#toc').innerHTML = '';
+  }
+
   /* ---------------------------------------------------------------- Word */
+
+  async function renderDocxBuffer(buf, filePath, seq, isLocalPreview) {
+    if (!lib.mammoth) throw new Error('mammoth 库未就绪');
+    const out = await lib.mammoth.convertToHtml({ arrayBuffer: buf });
+    if (seq !== openSeq) return;
+
+    const c = $('#content');
+    // DOCX 是用户下载来的第三方内容：mammoth 的输出同样要过白名单，
+    // 否则文档里的图片 onerror / 外链 / 样式属性会直接进入阅读器 DOM。
+    const metaLabel = escapeHtml(filePath) + (isLocalPreview ? ' · 浏览器本地预览' : '');
+    c.innerHTML = '<div class="doc-meta">' + metaLabel + '</div>' + sanitizeHtml(out.value);
+    // Word 里的图片默认是 base64 data URI，直接可以显示；补上放大和目录
+    rewriteImages(isLocalPreview ? '' : filePath);
+    fixLinks(isLocalPreview ? '' : filePath);
+    enhanceCode();
+    buildToc();
+    enhanceTts();
+    state.translatable = true;
+    detectDocLanguage($('#content').textContent, filePath);
+  }
 
   async function renderDocx(filePath, seq) {
     await ensureLib(['mammoth', 'dompurify']);
@@ -1656,33 +1969,13 @@
     if (!res.ok) throw Object.assign(new Error('HTTP ' + res.status), { status: res.status, requestUrl: rawUrl(filePath) });
     const buf = await res.arrayBuffer();
     if (seq !== openSeq) return;
-    const out = await lib.mammoth.convertToHtml({ arrayBuffer: buf });
-    if (seq !== openSeq) return;
-
-    const c = $('#content');
-    // DOCX 是用户下载来的第三方内容：mammoth 的输出同样要过白名单，
-    // 否则文档里的图片 onerror / 外链 / 样式属性会直接进入阅读器 DOM。
-    c.innerHTML = '<div class="doc-meta">' + escapeHtml(filePath) + '</div>' + sanitizeHtml(out.value);
-    // Word 里的图片默认是 base64 data URI，直接可以显示；补上放大和目录
-    rewriteImages(filePath);
-    fixLinks(filePath);
-    enhanceCode();
-    buildToc();
-    enhanceTts();
-    state.translatable = true;
-    detectDocLanguage($('#content').textContent, filePath);
+    await renderDocxBuffer(buf, filePath, seq, false);
   }
 
   /* ---------------------------------------------------------------- Excel */
 
-  async function renderSheet(filePath, seq) {
-    await ensureLib(['XLSX']);
-    if (seq !== openSeq) return;
+  function renderSheetBuffer(buf, filePath) {
     if (!lib.XLSX) throw new Error('xlsx 库未就绪');
-    const res = await fetch(rawUrl(filePath));
-    if (!res.ok) throw Object.assign(new Error('HTTP ' + res.status), { status: res.status, requestUrl: rawUrl(filePath) });
-    const buf = await res.arrayBuffer();
-    if (seq !== openSeq) return;
     const wb = lib.XLSX.read(buf, { type: 'array' });
 
     const c = $('#content');
@@ -1767,12 +2060,23 @@
     $('#toc').innerHTML = '';
   }
 
-  /* ---------------------------------------------------------------- 图片 / 视频 / 不支持 */
+  async function renderSheet(filePath, seq) {
+    await ensureLib(['XLSX']);
+    if (seq !== openSeq) return;
+    if (!lib.XLSX) throw new Error('xlsx 库未就绪');
+    const res = await fetch(rawUrl(filePath));
+    if (!res.ok) throw Object.assign(new Error('HTTP ' + res.status), { status: res.status, requestUrl: rawUrl(filePath) });
+    const buf = await res.arrayBuffer();
+    if (seq !== openSeq) return;
+    renderSheetBuffer(buf, filePath);
+  }
 
-  function renderImageFile(filePath) {
+  /* ---------------------------------------------------------------- 图片 / 视频 / 音频 / 不支持 */
+
+  function renderImageFile(filePath, customUrl, displayMeta) {
     const c = $('#content');
-    const url = rawUrl(filePath);
-    c.innerHTML = '<div class="doc-meta">' + escapeHtml(filePath) + '</div>';
+    const url = customUrl || rawUrl(filePath);
+    c.innerHTML = '<div class="doc-meta">' + escapeHtml(displayMeta || filePath) + '</div>';
     const fig = document.createElement('figure');
     fig.className = 'md-figure';
     const img = document.createElement('img');
@@ -1794,29 +2098,52 @@
     $('#toc').innerHTML = '';
   }
 
-  function renderVideoFile(filePath) {
+  function renderVideoFile(filePath, customUrl, displayMeta) {
     const c = $('#content');
-    c.innerHTML = '<div class="doc-meta">' + escapeHtml(filePath) + '</div>';
+    const url = customUrl || rawUrl(filePath);
+    c.innerHTML = '<div class="doc-meta">' + escapeHtml(displayMeta || filePath) + '</div>';
     const fig = document.createElement('figure');
     fig.className = 'video-embed';
     fig.innerHTML = '<div class="video-frame"><video controls preload="metadata" src="' +
-      escapeAttr(rawUrl(filePath)) + '"></video></div>';
+      escapeAttr(url) + '"></video></div>';
     c.appendChild(fig);
     $('#toc').innerHTML = '';
   }
 
-  function renderUnsupported(filePath, title, desc) {
+  function renderAudioFile(filePath, customUrl, displayMeta) {
     const c = $('#content');
-    const url = rawUrl(filePath);
+    const url = customUrl || rawUrl(filePath);
+    const name = baseName(filePath);
+    const ext = (extOf(filePath) || 'audio').toUpperCase();
+    c.innerHTML = '<div class="doc-meta">' + escapeHtml(displayMeta || filePath) + '</div>';
+    const fig = document.createElement('figure');
+    fig.className = 'audio-embed';
+    fig.innerHTML =
+      '<div class="audio-card">' +
+      '<div class="audio-head">' +
+      '<span class="audio-ico" aria-hidden="true">🎵</span>' +
+      '<div class="audio-meta">' +
+      '<div class="audio-title">' + escapeHtml(name) + '</div>' +
+      '<div class="audio-sub">' + escapeHtml(ext) + ' 音频文件</div>' +
+      '</div></div>' +
+      '<div class="audio-frame"><audio controls preload="metadata" src="' + escapeAttr(url) + '"></audio></div>' +
+      '</div>';
+    c.appendChild(fig);
+    $('#toc').innerHTML = '';
+  }
+
+  function renderUnsupported(filePath, title, desc, isLocalPreview) {
+    const c = $('#content');
+    const actionsHtml = isLocalPreview
+      ? '<button class="btn" id="btn-copy-path">复制文件名</button>'
+      : '<a class="btn btn-primary" href="' + escapeAttr(rawUrl(filePath)) + '" download>下载文件</a>' +
+        '<button class="btn" id="btn-copy-path">复制文件路径</button>';
     c.innerHTML =
       '<div class="card">' +
       '<h3>' + escapeHtml(title) + '</h3>' +
       '<p class="muted">' + escapeHtml(desc) + '</p>' +
       '<p class="muted path-mono">' + escapeHtml(filePath) + '</p>' +
-      '<div class="actions">' +
-      '<a class="btn btn-primary" href="' + escapeAttr(url) + '" download>下载文件</a>' +
-      '<button class="btn" id="btn-copy-path">复制文件路径</button>' +
-      '</div></div>';
+      '<div class="actions">' + actionsHtml + '</div></div>';
     $('#toc').innerHTML = '';
     const cp = $('#btn-copy-path');
     if (cp) {
@@ -1827,6 +2154,16 @@
         } catch (_) { toast('复制失败', 'err'); }
       });
     }
+  }
+
+  function renderTooLarge(filePath, err, isLocalPreview) {
+    const msg = (err && err.data && err.data.error) || (err && err.message) || '文件超过 32 MB 内联预览上限';
+    renderUnsupported(
+      filePath,
+      '文件过大，暂不支持内联预览',
+      msg + '。为避免大文件阻塞页面渲染，超过 32 MB 的文本文件请下载或复制路径后用本地编辑器打开。',
+      isLocalPreview
+    );
   }
 
   function renderError(err, filePath, onRetry) {
@@ -4161,6 +4498,33 @@
     localStorage.setItem(LS.tocOff, off ? '1' : '0');
   }
 
+  function syncTreeFilterButtons() {
+    const btnHidden = $('#btn-toggle-hidden');
+    if (btnHidden) {
+      btnHidden.classList.toggle('active', !!state.showHidden);
+      btnHidden.setAttribute('aria-pressed', state.showHidden ? 'true' : 'false');
+    }
+    const btnDeps = $('#btn-toggle-deps');
+    if (btnDeps) {
+      btnDeps.classList.toggle('active', !!state.showDeps);
+      btnDeps.setAttribute('aria-pressed', state.showDeps ? 'true' : 'false');
+    }
+  }
+
+  function applyShowHidden(show, reloadTree) {
+    state.showHidden = !!show;
+    try { localStorage.setItem(LS.showHidden, state.showHidden ? '1' : '0'); } catch (_) { /* ignore */ }
+    syncTreeFilterButtons();
+    if (reloadTree && state.root) loadTree(state.root);
+  }
+
+  function applyShowDeps(show, reloadTree) {
+    state.showDeps = !!show;
+    try { localStorage.setItem(LS.showDeps, state.showDeps ? '1' : '0'); } catch (_) { /* ignore */ }
+    syncTreeFilterButtons();
+    if (reloadTree && state.root) loadTree(state.root);
+  }
+
   function initPrefs() {
     const theme = localStorage.getItem(LS.theme) || 'light';
     applyTheme(theme);
@@ -4171,6 +4535,10 @@
 
     applyWide(localStorage.getItem(LS.wide) === '1');
     applyTocOff(localStorage.getItem(LS.tocOff) === '1');
+
+    state.showHidden = localStorage.getItem(LS.showHidden) === '1';
+    state.showDeps = localStorage.getItem(LS.showDeps) === '1';
+    syncTreeFilterButtons();
 
     $('#btn-theme').addEventListener('click', () => {
       applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -4192,15 +4560,26 @@
     $('#btn-toc').addEventListener('click', () => {
       applyTocOff(!document.body.classList.contains('toc-off'));
     });
+
+    const btnHidden = $('#btn-toggle-hidden');
+    if (btnHidden) {
+      btnHidden.addEventListener('click', () => {
+        applyShowHidden(!state.showHidden, true);
+      });
+    }
+    const btnDeps = $('#btn-toggle-deps');
+    if (btnDeps) {
+      btnDeps.addEventListener('click', () => {
+        applyShowDeps(!state.showDeps, true);
+      });
+    }
   }
 
   /* ---------------------------------------------------------------- 目录 / 文件选择 */
 
-  /** 切换根目录：输入框、localStorage、文件树一起更新 */
+  /** 切换根目录：输入框、localStorage、主进程目录同步与文件树一起更新 */
   function setRoot(dir) {
-    state.root = dir;
-    $('#root-input').value = dir;
-    localStorage.setItem(LS.lastRoot, dir);
+    syncRootState(dir);
     return loadTree(dir);
   }
 
@@ -4235,11 +4614,16 @@
       } catch (_) {
         p = '';
       }
-      if (!p) {
-        toast('无法读取拖入文件的路径，请改用「文件 → 打开文件…」', 'err');
+      if (p) {
+        openPath(p);
         return;
       }
-      openPath(p);
+      // 纯浏览器模式无法读取真实路径，直接走本地 File API 预览
+      if (file) {
+        openWebLocalFile(file);
+        return;
+      }
+      toast('无法读取拖入文件的路径，请改用「打开文件」按钮', 'err');
     });
 
     // Electron 下走主进程的原生文件夹对话框：主进程是前台进程，
@@ -4258,16 +4642,44 @@
       }
 
       // 纯浏览器模式没有原生对话框，退回应用内：从「此电脑」开始逐级点进去
-      state.root = DRIVES;
-      loadTree(DRIVES);
+      setRoot(DRIVES);
       toast('从「此电脑」里选一个磁盘，再逐级点进文件夹');
     });
+
+    // 顶栏「打开文件」按钮：Electron 下调主进程原生对话框，Web 模式触发隐藏 <input type="file">
+    const btnOpenFile = $('#btn-open-file');
+    const webFileInput = $('#web-file-input');
+    if (btnOpenFile) {
+      btnOpenFile.addEventListener('click', async () => {
+        if (native && native.pickFile) {
+          let file = null;
+          try {
+            file = await native.pickFile(state.root === DRIVES ? '' : state.root || '');
+          } catch (e) {
+            toast('打开文件失败：' + e.message, 'err');
+            return;
+          }
+          if (file) openPath(file);
+          return;
+        }
+        if (webFileInput) {
+          webFileInput.value = '';
+          webFileInput.click();
+        }
+      });
+    }
+    if (webFileInput) {
+      webFileInput.addEventListener('change', () => {
+        const f = webFileInput.files && webFileInput.files[0];
+        if (f) openWebLocalFile(f);
+      });
+    }
 
     $('#btn-go').addEventListener('click', goRoot);
     $('#root-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') goRoot(); });
     $('#btn-refresh').addEventListener('click', () => {
       if (state.root) loadTree(state.root);
-      if (state.currentFile) openFile(state.currentFile);
+      if (state.currentFile && !state.isWebLocalFile) openFile(state.currentFile);
     });
   }
 
@@ -4526,7 +4938,10 @@
 
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll);
-    window.addEventListener('beforeunload', () => saveScroll(state.currentFile));
+    window.addEventListener('beforeunload', () => {
+      if (state.currentFile && !state.isWebLocalFile) saveScroll(state.currentFile);
+      revokeActiveBlobUrl();
+    });
 
     // 启动时服务可能还在监听端口：失败自动重试 3 次，再给出可点击的重试按钮，
     // 而不是把页面永久停在“载入失败”。
@@ -4611,9 +5026,11 @@
     ready: false,
     stats: null,
     state: state,
+    formats: formats,
     openFile: function (p) { return openFile(p); },
-    reload: function () { return state.currentFile ? openFile(state.currentFile) : Promise.resolve(); },
-    setRoot: function (p) { state.root = p; $('#root-input').value = p; return loadTree(p); },
+    openLocalFile: function (file) { return openWebLocalFile(file); },
+    reload: function () { return state.currentFile && !state.isWebLocalFile ? openFile(state.currentFile) : Promise.resolve(); },
+    setRoot: function (p) { return setRoot(p); },
     refreshStats: updateStats,
     bilingual: {
       mode: function () { return bi.mode; },

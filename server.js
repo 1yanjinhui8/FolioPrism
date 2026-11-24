@@ -12,6 +12,7 @@ const cp = require('node:child_process');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const translator = require('./translator');
+const formats = require('./public/formats');
 
 const __dir = __dirname;
 const PUBLIC_DIR = path.join(__dir, 'public');
@@ -56,10 +57,10 @@ const CSP =
   // Markdown/DOCX/HTML/XLSX 四条渲染路径里统一剥离。
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data: blob: https: http:; " +
-  "media-src 'self' https: http:; " +
+  "media-src 'self' blob: https: http:; " +
   "font-src 'self' data:; " +
   "connect-src 'self'; " +
-  "frame-src 'self' https://player.bilibili.com https://www.youtube.com; " +
+  "frame-src 'self' blob: https://player.bilibili.com https://www.youtube.com; " +
   "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /* ------------------------------------------------------------------ */
@@ -128,7 +129,7 @@ const MIME = {
   mp4: 'video/mp4',
   avif: 'image/avif',
   webm: 'video/webm',
-  ogg: 'video/ogg',
+  ogg: 'audio/ogg',
   ogv: 'video/ogg',
   mov: 'video/quicktime',
   m4v: 'video/mp4',
@@ -147,6 +148,7 @@ const MIME = {
   css: 'text/css; charset=utf-8',
   js: 'application/javascript; charset=utf-8',
   mjs: 'application/javascript; charset=utf-8',
+  cjs: 'application/javascript; charset=utf-8',
   json: 'application/json; charset=utf-8',
   md: 'text/markdown; charset=utf-8',
   markdown: 'text/markdown; charset=utf-8',
@@ -158,35 +160,26 @@ const MIME = {
 };
 
 function contentTypeFor(p) {
-  const ext = path.extname(p).slice(1).toLowerCase();
+  const ext = path.extname(p).slice(1).toLowerCase() || formats.extOf(p);
   // 未知类型以前一律当 text/plain，配合 nosniff 会把二进制文件当乱码显示；
   // 用 octet-stream 让浏览器按“下载”处理
   return MIME[ext] || 'application/octet-stream';
 }
 
 /**
- * /api/raw 的可信类型边界。
+ * /api/raw 的可信类型边界（统一来自 public/formats.js）。
  *
  * 这些类型可以内联返回：PDF 需要给 iframe 用，图片/音视频要直接渲染，
  * Office 文件由前端 fetch 后解析。其余类型（HTML/SVG/JS/CSS/JSON/纯文本）
  * 一旦被直接导航，就等价于一个同源页面，能调用本服务的全部文件 API，
  * 因此统一改成附件下载并加 sandbox CSP。
  */
-const INLINE_RAW_EXT = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif',
-  'mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v', 'mkv',
-  'mp3', 'wav', 'm4a', 'flac',
-  'pdf', 'docx', 'xlsx', 'xls', 'pptx',
-]);
+const INLINE_RAW_EXT = formats.INLINE_RAW_EXT;
 /**
- * 文档里相对引用的资源只允许媒体类型：这个接口只给正文的 <img>/<video> 用，
+ * 文档里相对引用的资源只允许媒体类型：这个接口只给正文的 <img>/<video>/<audio> 用，
  * 不需要 Office/PDF，收窄后 /api/asset 更不可能被当作任意文件读取通道。
  */
-const ASSET_EXT = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'svg',
-  'mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v', 'mkv',
-  'mp3', 'wav', 'm4a', 'flac',
-]);
+const ASSET_EXT = formats.ASSET_EXT;
 
 function applyRawPolicy(res, filePath) {
   const ext = path.extname(filePath).slice(1).toLowerCase();
@@ -202,21 +195,13 @@ function applyRawPolicy(res, filePath) {
 }
 
 /* ------------------------------------------------------------------ */
-/* kind 判定                                                            */
+/* kind 判定（统一来自 public/formats.js）                              */
 /* ------------------------------------------------------------------ */
 
-const CODE_EXT = new Set([
-  'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cc', 'cpp', 'h', 'hpp', 'cs',
-  'go', 'rs', 'php', 'rb', 'sh', 'bat', 'ps1', 'html', 'htm', 'css', 'scss',
-  'less', 'json', 'yaml', 'yml', 'toml', 'ini', 'xml', 'sql', 'vue', 'swift',
-  'kt', 'm', 'mm', 'gradle', 'properties',
-]);
+const CODE_EXT = new Set(formats.CODE_EXT);
 
-function kindFor(ext) {
-  const e = String(ext || '').toLowerCase();
-  if (e === 'md' || e === 'markdown') return 'markdown';
-  if (CODE_EXT.has(e)) return 'code';
-  return 'text';
+function kindFor(filePathOrExt) {
+  return formats.serverKindFor(filePathOrExt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -785,6 +770,8 @@ async function handleRequest(req, res) {
   /* --- /api/browse --- */
   if (pathname === '/api/browse') {
     const p = parsed.searchParams.get('path') || ROOT;
+    const showHidden = parsed.searchParams.get('hidden') === '1';
+    const showDeps = parsed.searchParams.get('deps') === '1';
 
     /* 虚拟目录「此电脑」：列出本机所有可用的磁盘根 */
     if (p === DRIVES_PATH) {
@@ -803,7 +790,13 @@ async function handleRequest(req, res) {
           return { name: letter + ':', isDir: true, path: root, size: 0, ext: '', mtime: 0 };
         })
       ).filter(Boolean);
-      return sendJson(res, 200, { path: DRIVES_PATH, parent: null, entries: drives });
+      return sendJson(res, 200, {
+        path: DRIVES_PATH,
+        parent: null,
+        entries: drives,
+        hiddenCount: 0,
+        depsHiddenCount: 0,
+      });
     }
 
     let stat;
@@ -823,18 +816,47 @@ async function handleRequest(req, res) {
       return sendJson(res, 404, { error: '无法读取目录: ' + p });
     }
 
-    // 以前每项 statSync 一次：上千个文件的目录会把事件循环整个卡住
-    const visible = dirents.filter(
-      (d) => !d.name.startsWith('.') && !(d.isDirectory() && d.name === 'node_modules')
-    );
+    // 统计并按开关过滤隐藏项（点文件/目录）与依赖目录（node_modules）
+    let hiddenCount = 0;
+    let depsHiddenCount = 0;
+    const visible = [];
+    for (const d of dirents) {
+      const isDep = d.name === 'node_modules';
+      const isDot = !isDep && d.name.startsWith('.');
+      if (isDep) {
+        depsHiddenCount++;
+        if (!showDeps) continue;
+      } else if (isDot) {
+        hiddenCount++;
+        if (!showHidden) continue;
+      }
+      visible.push(d);
+    }
+
+    // stat 失败不再静默丢弃：保留为 unreadable 占位项，前端灰显并展示原因
     const entries = (
       await mapLimit(visible, 32, async (d) => {
         const full = path.join(p, d.name);
         let st;
         try {
           st = await fs.promises.stat(full);
-        } catch (_) {
-          return null;
+        } catch (err) {
+          let isDir = false;
+          try {
+            isDir = Boolean(d.isDirectory && d.isDirectory());
+          } catch (_) {
+            isDir = false;
+          }
+          return {
+            name: d.name,
+            path: full,
+            isDir,
+            size: 0,
+            ext: isDir ? '' : formats.extOf(d.name),
+            mtime: 0,
+            unreadable: true,
+            error: (err && (err.code || err.message)) || '不可访问',
+          };
         }
         const isDir = st.isDirectory();
         return {
@@ -842,7 +864,7 @@ async function handleRequest(req, res) {
           path: full,
           isDir,
           size: isDir ? 0 : st.size,
-          ext: isDir ? '' : path.extname(d.name).slice(1).toLowerCase(),
+          ext: isDir ? '' : formats.extOf(d.name),
           mtime: Math.round(st.mtimeMs),
         };
       })
@@ -858,6 +880,8 @@ async function handleRequest(req, res) {
       path: p,
       parent: parentDir === p ? null : parentDir,
       entries,
+      hiddenCount,
+      depsHiddenCount,
     });
   }
 
@@ -871,18 +895,25 @@ async function handleRequest(req, res) {
       info = await readTextSmart(p);
     } catch (e) {
       if (e.code === 'not-file') return sendJson(res, 404, { error: '不是文件: ' + p });
-      if (e.code === 'too-large') return sendJson(res, 413, { error: e.message, path: p });
+      if (e.code === 'too-large') {
+        return sendJson(res, 413, {
+          error: e.message,
+          code: 'too-large',
+          path: p,
+          maxBytes: READ_MAX_BYTES,
+        });
+      }
       if (e.code === 'ENOENT') return sendJson(res, 404, { error: '文件不存在: ' + p });
       return sendJson(res, 500, { error: '读取失败: ' + e.message });
     }
 
-    const ext = path.extname(p).slice(1).toLowerCase();
+    const ext = formats.extOf(p);
     return sendJson(res, 200, {
       path: p,
-      dir: path.dirname(p),
+      dir: formats.dirOf(p) || path.dirname(p),
       name: path.basename(p),
       ext,
-      kind: kindFor(ext),
+      kind: kindFor(p),
       size: info.size,
       encoding: info.encoding,
       text: info.text,

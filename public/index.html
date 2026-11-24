@@ -12,6 +12,7 @@
 <script defer src="/vendor/highlight.min.js"></script>
 <script defer src="/vendor/mammoth.browser.min.js"></script>
 <script defer src="/vendor/xlsx.full.min.js"></script>
+<script defer src="/assets/formats.js"></script>
 <script defer src="/assets/app.js"></script>
 </head>
 <body data-theme="light">
@@ -23,6 +24,10 @@
     <button id="btn-open-folder" class="btn btn-primary" title="选择要阅读的文件夹（Ctrl+O）" aria-label="打开文件夹">
       <span class="ico" aria-hidden="true">📂</span> 打开文件夹
     </button>
+    <button id="btn-open-file" class="btn" title="选择单个文件打开（Ctrl+Shift+O）" aria-label="打开文件">
+      <span class="ico" aria-hidden="true">📄</span> 打开文件
+    </button>
+    <input id="web-file-input" type="file" hidden aria-label="选择本地文件">
     <div class="path-box">
       <input id="root-input" type="text" spellcheck="false" aria-label="文件夹路径" placeholder="粘贴文件夹路径，例如 d:\Documents\notes">
       <button id="btn-go" class="btn">前往</button>
@@ -58,10 +63,15 @@
   <aside id="sidebar">
     <div class="side-head">
       <span class="side-title">文件</span>
-      <button id="btn-refresh" class="btn btn-mini" title="重新加载当前目录" aria-label="刷新当前目录">刷新</button>
+      <div class="side-tools">
+        <button id="btn-toggle-hidden" type="button" class="btn btn-mini side-toggle" title="显示或隐藏以 . 开头的隐藏文件/文件夹" aria-pressed="false">隐藏项</button>
+        <button id="btn-toggle-deps" type="button" class="btn btn-mini side-toggle" title="显示或隐藏 node_modules 依赖目录" aria-pressed="false">依赖</button>
+        <button id="btn-refresh" class="btn btn-mini" title="重新加载当前目录" aria-label="刷新当前目录">刷新</button>
+      </div>
     </div>
     <div id="continue" class="continue"></div>
     <div id="recent" class="recent"></div>
+    <div id="tree-filter-hint" class="tree-filter-hint" hidden></div>
     <div id="tree" class="tree"><div class="tree-loading">正在读取目录…</div></div>
   </aside>
 

@@ -62,6 +62,7 @@ function decodeBasicEntities(s) {
 
 function createDomHarness(opts) {
   const o = opts || {};
+  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'formats.js'), 'utf8');
   const code = fs.readFileSync(path.join(ROOT_DIR, 'public', 'app.js'), 'utf8');
   const hljsCalls = [];
 
@@ -356,6 +357,9 @@ function createDomHarness(opts) {
     setTimeout,
     clearTimeout,
     URL,
+    TextDecoder,
+    Uint8Array,
+    ArrayBuffer,
     AbortController,
     performance: { now: () => Date.now() },
     localStorage: {
@@ -397,6 +401,17 @@ function createDomHarness(opts) {
         if (!rec) {
           return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
         }
+        if (rec.tooLarge) {
+          return {
+            ok: false,
+            status: 413,
+            json: async () => ({
+              error: '文件过大，暂不支持内联预览（上限 32 MB）',
+              code: 'too-large',
+              path: p,
+            }),
+          };
+        }
         return {
           ok: true,
           status: 200,
@@ -436,6 +451,7 @@ function createDomHarness(opts) {
   sandbox.window.addEventListener = () => {};
   sandbox.window.scrollTo = () => {};
 
+  vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
   vm.runInNewContext(code, sandbox, { filename: 'public/app.js' });
   return { sandbox, content: fixedIds.content, toastBox: fixedIds.toast, hljsCalls };
 }
@@ -530,6 +546,61 @@ test('enhanceCode wraps Markdown fenced code block in-place preserving sibling o
   assert.equal(tags[3].tag, 'P');
   assert.equal(content.childNodes[2].querySelectorAll('button.code-copy').length, 1);
   assert.equal(content.childNodes[2].querySelectorAll('pre').length, 1);
+});
+
+test('openFile renders dotfiles, extensionless files, audio files, friendly 413 card, and Web local File objects', async () => {
+  const files = {
+    'D:\\repo\\.gitignore': { text: 'node_modules/\ndist/\n', encoding: 'utf-8' },
+    'D:\\repo\\.env': { text: 'PORT=7788\n', encoding: 'utf-8' },
+    'D:\\repo\\Makefile': { text: 'build:\n\tnode pack.js\n', encoding: 'utf-8' },
+    'D:\\repo\\Dockerfile': { text: 'FROM node:22-alpine\n', encoding: 'utf-8' },
+    'D:\\repo\\LICENSE': { text: 'MIT License\nCopyright (c) 2026 YJH', encoding: 'utf-8' },
+    'D:\\repo\\huge.log': { tooLarge: true },
+  };
+  const { sandbox, content, hljsCalls } = createDomHarness({
+    withHljs: true,
+    supportedLangs: ['makefile', 'dockerfile', 'python', 'py', 'json', 'js'],
+    files,
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 1. 点文件与无扩展名文件
+  for (const p of ['D:\\repo\\.gitignore', 'D:\\repo\\.env', 'D:\\repo\\Makefile', 'D:\\repo\\Dockerfile', 'D:\\repo\\LICENSE']) {
+    const ok = await sandbox.__reader.openFile(p);
+    assert.equal(ok, true, 'openFile should succeed for ' + p);
+    assert.equal(content.querySelectorAll('.err-card').length, 0);
+    assert.equal(content.querySelectorAll('.code-block.file-code').length, 1);
+  }
+  assert.ok(hljsCalls.some((c) => c.className.includes('language-makefile')));
+  assert.ok(hljsCalls.some((c) => c.className.includes('language-dockerfile')));
+
+  // 2. 音频文件渲染
+  const okAudio = await sandbox.__reader.openFile('D:\\music\\demo.mp3');
+  assert.equal(okAudio, true);
+  assert.equal(content.querySelectorAll('.err-card').length, 0);
+  assert.equal(content.querySelectorAll('.audio-embed').length, 1);
+  assert.equal(content.querySelectorAll('audio').length, 1);
+
+  // 3. >32MB HTTP 413 渲染友好卡片（不含 .err-card 与无效 #btn-retry）
+  const okHuge = await sandbox.__reader.openFile('D:\\repo\\huge.log');
+  assert.equal(okHuge, false);
+  assert.equal(content.querySelectorAll('.err-card').length, 0, '413 must NOT render red .err-card');
+  assert.equal(content.querySelectorAll('#btn-retry').length, 0, '413 must NOT render useless retry button');
+  assert.equal(content.querySelectorAll('.card').length, 1, '413 must render friendly info card');
+  assert.ok(content.textContent.includes('32 MB'));
+
+  // 4. Web 模式本地 File 对象预览（不污染 lastFile）
+  const prevLastFile = sandbox.localStorage.getItem('media-reader/lastFile');
+  const fakeLocalFile = {
+    name: 'local_note.txt',
+    size: 18,
+    arrayBuffer: async () => Buffer.from('本地文件预览测试', 'utf8'),
+  };
+  const okLocal = await sandbox.__reader.openLocalFile(fakeLocalFile);
+  assert.equal(okLocal, true);
+  assert.equal(content.querySelectorAll('.code-block.file-code').length, 1);
+  assert.ok(content.textContent.includes('本地文件预览测试'));
+  assert.equal(sandbox.localStorage.getItem('media-reader/lastFile'), prevLastFile, 'Web local File must not overwrite LS.lastFile');
 });
 
 /* ------------------------------------------------------------------ */

@@ -409,6 +409,7 @@ test('translator.killAllChildren terminates persistent TTS worker cleanly', asyn
 /* ------------------------------------------------------------------ */
 
 function loadFrontendHarness() {
+  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'formats.js'), 'utf8');
   const code = fs.readFileSync(path.join(ROOT_DIR, 'public', 'app.js'), 'utf8');
   const fetchCalls = [];
   const audioInstances = [];
@@ -562,6 +563,7 @@ function loadFrontendHarness() {
   sandbox.window.scrollTo = () => {};
   sandbox.setPlayBehavior = (b) => { audioPlayBehavior = b; };
 
+  vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
   vm.runInNewContext(code, sandbox, { filename: 'public/app.js' });
   return { sandbox, fetchCalls, audioInstances, speechCalls, getEl };
 }
