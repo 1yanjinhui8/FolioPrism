@@ -6,7 +6,7 @@
 
 仓库：https://github.com/1yanjinhui8/FolioPrism
 默认分支：main
-最新版本：1.5.2
+最新版本：1.5.3
 许可证：MIT（Copyright (c) 2026 YJH）
 
 ## 项目定位
@@ -87,6 +87,7 @@ ELECTRON_ZIP_DIR="D:/path/to/electron-cache" npm run dist
 
 ## 版本历史
 
+- 1.5.3：PDF 阅读体验与翻译稳定性修复。PDF 视图改为铺满窗口，顶栏新增 A- / A+ 缩放（75%–200%，快捷键沿用「视图 → 增大/减小字号」），并跟随 Windows「文本大小」辅助功能缩放；「重新翻译」会真正强制重跑（`force` + `--ignore-cache`），切换翻译服务/语言后自动刷新 PDF 状态；Bing 翻译长段落自动分块（≤900 字符、保护 `{vN}` 占位符），并在原文与译文语言相同时给出明确提示而不是静默失败；界面字号改用 `--font-size-base × --text-scale` 计算。
 - 1.5.2：修复 Excel 表格内嵌图片无法显示。支持 WPS `=DISPIMG("ID_...",1)` 嵌入式单元格图片（解析 `xl/cellimages.xml` 与关系映射）与标准 Excel 浮动图片（`oneCellAnchor` / `twoCellAnchor` 锚点落到对应单元格），自动隐藏 `WpsReserved_CellImgList` 等 veryHidden 保留表；图片以 `Blob URL` 渲染并接入灯箱放大，切换文件时统一回收，外链与 SVG 等非位图媒体被安全拦截。
 - 1.5.1：界面与导航重构。顶栏移除「打开文件夹 / 打开文件」、路径框、字号/宽度/目录/翻译设置按钮，桌面端统一收口到原生菜单栏（「文件 → 打开文件…」`Ctrl+O`，「视图」内含 A+/A-/阅读宽度/翻译设置）；移除全盘文件夹树、最近文件夹与右侧目录栏，改为两栏布局，左侧边栏保留「继续阅读」与可收起/展开的文档目录；纯浏览器 Web 模式提供顶栏「打开文件」与「视图 ▾」下拉替代原生菜单。
 - 1.5.0：新增统一格式注册表（`public/formats.js`），补齐音频（mp3/wav/m4a/flac/ogg）与 mkv/ogv 视频、点文件（.gitignore/.env）及无扩展名文件（Makefile/Dockerfile/LICENSE/README）支持；侧栏新增隐藏项/依赖目录开关与不可读占位行；顶栏新增「打开文件」按钮并支持 Web 模式本地 File API 预览；安装包支持注册 Windows「打开方式」与默认应用关联。

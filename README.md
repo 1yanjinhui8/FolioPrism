@@ -12,7 +12,11 @@
 ![Local First](https://img.shields.io/badge/Privacy-Local--First-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
 
-[English](#english) · [简体中文](#简体中文)
+**[Download for Windows](https://github.com/1yanjinhui8/FolioPrism/releases/latest)** · [English](#english) · [简体中文](#简体中文)
+
+![FolioPrism reading a paper in bilingual mode](assets/hero.gif)
+
+<sub>English paper → Chinese under every sentence → hover lookup → read aloud. All local.</sub>
 
 </div>
 
@@ -22,7 +26,7 @@
 
 ## English
 
-**FolioPrism** (棱阅 · repository: `FolioPrism`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at browsing local folders containing Markdown notes, academic PDFs, Office files, source code, and media side-by-side—especially for bilingual reading of English research papers and technical documentation.
+**FolioPrism** (棱阅 · repository: `FolioPrism`) is a local-first desktop and web multimedia document reader built with **Electron** and a **zero-dependency Node.js `http` server**. Designed with no database and no cloud lock-in, it excels at reading the files you already keep locally—Markdown notes, academic PDFs, Office files, source code, and media—especially for bilingual reading of English research papers and technical documentation.
 
 ### Key Features
 
@@ -31,6 +35,9 @@
   - **PDF (`.pdf`)**: Built-in PDF viewer with layout-preserving bilingual translation powered by [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate) (`pdf2zh`), keeping formulas, charts, and tables intact. Independent iframes for **Original / Dual / Mono** modes preserve your scroll position when switching views.
   - **Office & Data**: `.docx` rendering (`mammoth`); multi-sheet `.xlsx` / `.xls` / `.csv` tables (`SheetJS`), including WPS embedded cell images (`=DISPIMG(...)`) and standard Excel floating images anchored to their cells; and sanitized `.html` / `.htm`. (`.pptx` is recognized for download/external launch rather than inline preview.)
   - **Code, Configs & Special Files**: 45+ programming and config formats, plus dotfiles (`.gitignore`, `.env`, `.env.*`, `.editorconfig`, `.npmrc`, etc.) and extensionless project files (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `CHANGELOG`), with automatic encoding detection (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE/BE`, `GBK`, `Latin1`, up to 32 MB) and a unified format registry (`public/formats.js`) shared between the native file dialog, HTTP server, and renderer.
+
+<p align="center"><img src="assets/multi-format.png" alt="Markdown, DOCX, CSV and code in one window" width="920"></p>
+<p align="center"><img src="assets/pdf-bilingual.png" alt="Layout-preserving bilingual PDF" width="920"></p>
 - **Rich Media, Audio & Video Integration**
   - Resolves relative & remote images in Markdown with lazy loading and a full-screen **Lightbox** (zoom, pan, prev/next).
   - Embeds local audio (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`) and video (`.mp4`, `.webm`, `.ogv`, `.mov`, `.m4v`, `.mkv`) players with HTTP `206 Partial Content` (`Range`) seeking and playback-progress resume.
@@ -39,14 +46,21 @@
   - Sentence-level inline translation with a 3-state toggle (**Bilingual / Translation Only / Off**) persisted across files across **19 languages**.
   - **Translation Backends**: Out-of-the-box Bing Web Translate (default) and Google Translate (multi-endpoint failover), plus customizable **OpenAI-compatible APIs** (DeepSeek, GPT, local Ollama, etc.) tuned for academic papers.
   - **2-Second Hover / Selection Lookup**: Uses `Intl.Segmenter` for accurate word boundaries (including CJK), querying Youdao Dictionary (with US/UK phonetics for EN→ZH) or falling back to your translation engine, with instant pronunciation.
+
+<p align="center"><img src="assets/original-vs-bilingual.png" alt="Original vs bilingual" width="920"></p>
+<p align="center"><img src="assets/hover-lookup.png" alt="Hover lookup" width="920"></p>
 - **Neural Text-to-Speech (TTS)**
   - Paragraph-level and full-article/page-by-page PDF narration via `edge-tts` (with `0.7×–1.3×` speed control and language-aware neural voice selection), automatically falling back to the browser's `Web Speech API` when offline or unconfigured.
   - **Streaming playback**: a persistent Python worker keeps pre-warmed WebSocket connections to the Edge endpoint, and the server streams MP3 frames over HTTP as they arrive. The browser decodes and schedules them with the Web Audio API, so speech starts before the whole clip is synthesized. Long paragraphs are split into a short first chunk (fast start) plus ≤800-character follow-ups, so text over 1,200 characters no longer hits the request limit.
+
+<p align="center"><img src="assets/tts.png" alt="Neural TTS with sentence highlighting" width="920"></p>
 - **Thoughtful Reading Experience**
   - **Non-Destructive Find (`Ctrl+F` / `F3`)**: Powered by the CSS Custom Highlight API (`CSS.highlights`), skipping translation blocks so layout, TTS highlights, and scroll state stay untouched.
   - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* list, Light/Dark themes, adjustable font sizes, and reading-width toggle.
   - **Clean Menu & Left-Sidebar Outline**: Desktop mode puts **Open File** (`Ctrl+O`) under the top **File** menu and reading font size / width / translation settings under the **View** menu (standalone Web mode provides compact top-bar **Open File** and **View** dropdown controls). The left sidebar focuses on *Continue Reading* and a collapsible document **Table of Contents**, removing full-disk folder tree navigation.
   - **Desktop Integration**: Single-instance window, drag-and-drop file opening, Windows *"Open with"* & Default Apps registration (without hijacking existing defaults), and CLI file arguments.
+
+<p align="center"><img src="assets/dark.png" alt="Dark theme" width="920"></p>
 
 ### Requirements
 
@@ -145,6 +159,7 @@ verify.js           End-to-end verification script
 installer/          Inno Setup 6 script for the Windows installer
 test/               Unit, real-browser E2E and packaged-app smoke tests
 start.bat           One-click Windows Web mode launcher
+assets/             README screenshots and demo GIF (not packaged)
 build/              Application icon (icon.ico)
 ```
 
@@ -189,7 +204,7 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
 
 **FolioPrism（棱阅）** 是一个跑在本机的**多媒体文档与双语伴读工作台**，采用 **Electron 桌面窗口 + 零第三方依赖的 Node.js `http` 本地服务**构建，无需数据库，也不依赖云端托管。
 
-主要面向「**把 Markdown 笔记、PDF 论文、Office 文档、源码和音视频放在本地文件夹中连续阅读**」的场景，尤其针对英文论文与技术文档的双语精读做了深度打磨。
+主要面向「**把散落在本地的 Markdown 笔记、PDF 论文、Office 文档、源码和音视频放进同一个阅读窗口连续阅读**」的场景，尤其针对英文论文与技术文档的双语精读做了深度打磨。
 
 ### 核心功能
 
@@ -198,6 +213,9 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
   - **PDF（`.pdf`）**：内置阅读器并集成开源项目 [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate)（`pdf2zh`），生成保留原版排版的双语 / 纯译文 PDF，公式、图表、表格留在原位；**原文 / 双语 / 译文**各自独立使用 `<iframe>`，切换视图不会跳回首页，刷新后也能接回后台翻译进度。
   - **Office 与网页**：支持 `.docx` 解析（`mammoth`）、多工作表 `.xlsx` / `.xls` / `.csv` 表格预览（`SheetJS`，含 WPS 嵌入式单元格图片 `=DISPIMG(...)` 与标准 Excel 浮动锚点图片）以及消毒后的 `.html` / `.htm`。（`.pptx` 识别后提供下载与路径复制卡片，不做内联渲染。）
   - **代码、配置与特殊文件**：通过前后端共享的统一格式注册表（`public/formats.js`）支持 45+ 种编程语言与配置文件、常见点文件（`.gitignore`、`.env`、`.env.*`、`.editorconfig`、`.npmrc` 等）以及无扩展名工程文件（`Makefile`、`Dockerfile`、`LICENSE`、`README`、`CHANGELOG`），单文件上限 32 MB，自动识别 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE/BE`、`GBK`、`Latin1` 编码，彻底对齐原生文件选择框筛选器与渲染器。
+
+<p align="center"><img src="assets/multi-format.png" alt="一个窗口阅读 Markdown、DOCX、CSV 与代码" width="920"></p>
+<p align="center"><img src="assets/pdf-bilingual.png" alt="保留排版的双语 PDF" width="920"></p>
 - **富媒体、音频与视频嵌入**
   - 自动解析 Markdown 中的相对路径图片、远程图片及本地图片兜底目录，支持懒加载与全屏**图片灯箱**（缩放、拖拽、上下张切换）。
   - 支持本地音频（`.mp3`、`.wav`、`.m4a`、`.flac`、`.ogg`）与视频（`.mp4`、`.webm`、`.ogv`、`.mov`、`.m4v`、`.mkv`）内嵌播放，服务端完整实现 HTTP `206 Partial Content`（`Range`）分片拖拽，并记住本地视频播放进度。
@@ -206,14 +224,21 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
   - **逐句双语对照**：支持 **19 种语言**，提供「双语 / 仅译文 / 关闭」三态一键切换，偏好跨文件自动记忆。
   - **多翻译引擎**：默认开箱即用 Bing 免费翻译（兼容国内网络）与 Google 翻译（多域名自动容灾互备）；支持配置 **OpenAI 兼容接口**（DeepSeek、GPT、本地 Ollama 等），内置面向学术论文的提示词优化。
   - **悬停 / 划词 2 秒自动查词**：基于 `Intl.Segmenter` 实现中/日/英/泰等多语种分词，英译中优先调用有道词典（带音标与词性释义），并支持一键单词发音。
+
+<p align="center"><img src="assets/original-vs-bilingual.png" alt="原文与双语对照" width="920"></p>
+<p align="center"><img src="assets/hover-lookup.png" alt="悬停查词" width="920"></p>
 - **神经语音朗读（TTS）**
   - 集成 `edge-tts` 神经语音合成，支持按段落点读、整篇连续朗读及 PDF 按页抽取朗读，支持 `0.7×–1.3×` 语速调节与按语种自动匹配母语音色；未安装语音引擎或离线时自动退回浏览器自带 `Web Speech API` 朗读。
   - **流式朗读**：常驻 Python 工作进程维护预热的 Edge WebSocket 连接，服务端收到 MP3 数据即通过 HTTP 边收边传，浏览器用 Web Audio 逐块解码调度，整段合成完之前就能出声。长段落会拆成「首块较短 + 后续 ≤800 字」多块，超过 1200 字也不会再因长度限制报错。
+
+<p align="center"><img src="assets/tts.png" alt="神经语音朗读与句子高亮" width="920"></p>
 - **沉浸式阅读辅助**
   - **无损文档内查找（`Ctrl+F` / `F3`）**：基于 `CSS Custom Highlight API`（`CSS.highlights`）实现，不修改 DOM 结构，不破坏双语排版与朗读高亮，自动跳过译文块。
   - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 列表、明暗主题切换、字号与阅读宽度调节。
   - **简洁菜单与左侧目录栏**：桌面端将**打开文件**（`Ctrl+O`）整合进顶部菜单栏「文件」，将**字号调节（A+ / A-）、阅读宽度、翻译设置**整合进「视图」菜单（纯浏览器 Web 模式在顶栏提供「打开文件」与「视图 ▾」下拉菜单，并支持 `File API` 本地预览）。左侧边栏保留**继续阅读**与可收起/展开的**文档目录**，不再展示全盘文件夹树。
   - **桌面与 Web 双栖**：支持单实例运行、拖放文件打开、Windows「打开方式 / 默认应用列表 / 命令行传参」直接打开（安装包可选注册 `HKCU` 文件关联而不强行篡改现有默认程序）。
+
+<p align="center"><img src="assets/dark.png" alt="暗色主题" width="920"></p>
 
 ### 环境要求
 
@@ -312,6 +337,7 @@ verify.js           端到端自动化验收脚本
 installer/          Inno Setup 6 安装包脚本
 test/               单元测试、真实浏览器 E2E、打包产物冒烟测试
 start.bat           Windows 一键启动 Web 模式脚本
+assets/             README 截图与演示 GIF（不参与打包）
 build/              应用图标（icon.ico）
 ```
 

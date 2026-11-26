@@ -11,6 +11,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const cp = require('node:child_process');
 const electron = require('electron');
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } =
   typeof electron === 'object' && electron ? electron : {};
@@ -148,8 +149,32 @@ async function pickFile(startDir) {
   return chosen;
 }
 
+/** 读取 Windows「文本大小」辅助功能缩放比例（100% -> 1.0），非 Windows 或读取失败回退 1 */
+function readSystemTextScale() {
+  if (process.platform !== 'win32') return Promise.resolve(1);
+  return new Promise((resolve) => {
+    cp.execFile(
+      'reg.exe',
+      ['query', 'HKCU\\Software\\Microsoft\\Accessibility', '/v', 'TextScaleFactor'],
+      { encoding: 'utf8', windowsHide: true, timeout: 2000 },
+      (err, stdout) => {
+        if (err || !stdout) return resolve(1);
+        const m = /TextScaleFactor\s+REG_DWORD\s+(0x[0-9a-fA-F]+|\d+)/i.exec(String(stdout));
+        if (!m) return resolve(1);
+        const raw = m[1].toLowerCase().startsWith('0x')
+          ? parseInt(m[1], 16)
+          : parseInt(m[1], 10);
+        if (!Number.isFinite(raw) || raw <= 0) return resolve(1);
+        const scale = Math.max(0.8, Math.min(2.25, Math.round(raw) / 100));
+        resolve(scale);
+      }
+    );
+  });
+}
+
 function registerIpc() {
   ipcMain.handle('reader:pick-file', (_e, startDir) => pickFile(startDir));
+  ipcMain.handle('reader:system-text-scale', () => readSystemTextScale());
   ipcMain.handle('reader:set-current-root', (_e, dir) => {
     const d = String(dir || '').trim();
     if (d && d !== '__DRIVES__') {
@@ -421,4 +446,5 @@ if (app && typeof app.setName === 'function') {
 
 module.exports = {
   extractFileArg,
+  readSystemTextScale,
 };

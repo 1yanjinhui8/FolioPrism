@@ -32,6 +32,8 @@ const IGNORE = [
   /^\/installer(\/|$)/,
   // 本机用户数据备份（阅读进度、缓存、配置），绝不能打进分发包
   /^\/data-backup(\/|$)/,
+  // README / 商店页用的演示截图与 GIF，运行时不需要
+  /^\/assets(\/|$)/,
 ];
 
 packager({

@@ -362,6 +362,16 @@ function toolPythonPath() {
   return path.join(appData, 'uv', 'tools', 'pdf2zh', 'Scripts', 'python.exe');
 }
 
+function findPdf2zhPython() {
+  const exe = findPdf2zh();
+  if (!exe) return '';
+  const pyName = process.platform === 'win32' ? 'python.exe' : 'python';
+  const sibling = path.join(path.dirname(exe), pyName);
+  if (fs.existsSync(sibling)) return sibling;
+  const uvPy = toolPythonPath();
+  return fs.existsSync(uvPy) ? uvPy : '';
+}
+
 function engineInfo() {
   const exe = findPdf2zh();
   const ttsExe = findEdgeTts();
@@ -2502,6 +2512,7 @@ function fileKey(file, service) {
         service,
         config.sourceLang,
         config.targetLang,
+        'v2',
       ].join('|')
     )
     .digest('hex')
@@ -2742,7 +2753,191 @@ function scheduleCachePrune() {
 
 scheduleCachePrune();
 
-async function startPdfTranslate(file) {
+const PDF2ZH_WRAPPER_SCRIPT = [
+  'import re, sys, threading, time',
+  'from urllib.parse import urlsplit',
+  'import requests',
+  'import pdf2zh.translator as _pt',
+  'from pdf2zh.pdf2zh import main as _pdf2zh_main',
+  '',
+  '_PLACEHOLDER_RE = re.compile(r"\\{\\s*v\\d[\\d\\s]*\\}")',
+  '_SENT_END_RE = re.compile(r"(?:[.!?。！？؟۔।॥]\\s|[.!?。！？؟۔।॥]$|\\n)")',
+  '',
+  'def _fp_split_chunks(text, max_len=900):',
+  '    if not text or len(text) <= max_len:',
+  '        return [text] if text else []',
+  '    parts = []',
+  '    rest = text',
+  '    while len(rest) > max_len:',
+  '        spans = [(m.start(), m.end()) for m in _PLACEHOLDER_RE.finditer(rest[: max_len + 32])]',
+  '        def in_placeholder(pos):',
+  '            return any(a < pos < b for a, b in spans)',
+  '        win = rest[:max_len]',
+  '        cut = -1',
+  '        for m in _SENT_END_RE.finditer(win):',
+  '            pos = m.end()',
+  '            if not in_placeholder(pos):',
+  '                cut = pos',
+  '        if cut <= 0:',
+  '            sp = win.rfind(" ")',
+  '            while sp > 0 and in_placeholder(sp):',
+  '                sp = win.rfind(" ", 0, sp)',
+  '            if sp > 0:',
+  '                cut = sp + 1',
+  '        if cut <= 0:',
+  '            cut = max_len',
+  '            for a, b in spans:',
+  '                if a < cut < b:',
+  '                    cut = a if a > 0 else b',
+  '                    break',
+  '        if cut <= 0:',
+  '            cut = max_len',
+  '        parts.append(rest[:cut])',
+  '        rest = rest[cut:]',
+  '    if rest:',
+  '        parts.append(rest)',
+  '    return parts',
+  '',
+  'def _patch_bing():',
+  '    orig_cls = _pt.BingTranslator',
+  '    orig_init = orig_cls.__init__',
+  '    def patched_init(self, lang_in, lang_out, model, ignore_cache=False, **kwargs):',
+  '        orig_init(self, lang_in, lang_out, model, ignore_cache=ignore_cache, **kwargs)',
+  '        self._fp_lock = threading.Lock()',
+  '        self._fp_local = threading.local()',
+  '        self._fp_auth = None',
+  '        self.add_cache_impact_parameters("fp_chunk", 1)',
+  '    def _fp_session(self):',
+  '        sess = getattr(self._fp_local, "session", None)',
+  '        if sess is None:',
+  '            sess = requests.Session()',
+  '            self._fp_local.session = sess',
+  '        return sess',
+  '    def _fp_get_auth(self, force=False):',
+  '        with self._fp_lock:',
+  '            now = time.monotonic()',
+  '            if not force and self._fp_auth and now < self._fp_auth["exp"]:',
+  '                return self._fp_auth',
+  '            sess = self._fp_session()',
+  '            r = sess.get(self.endpoint, headers=self.headers, timeout=30)',
+  '            r.raise_for_status()',
+  '            sp = urlsplit(r.url)',
+  '            origin = f"{sp.scheme}://{sp.netloc}"',
+  '            ig_m = re.findall(r\'"ig":"(.*?)"\', r.text) or re.findall(r\'IG:"(.*?)"\', r.text)',
+  '            iid_m = re.findall(r\'data-iid="(translator\\.\\d+)"\', r.text) or re.findall(r\'data-iid="(.*?)"\', r.text)',
+  '            kt_m = re.findall(r"params_AbusePreventionHelper\\s*=\\s*\\[(.*?),\\"(.*?)\\",", r.text)',
+  '            if not ig_m or not iid_m or not kt_m:',
+  '                raise RuntimeError("Bing auth parse failed")',
+  '            self._fp_auth = {',
+  '                "origin": origin,',
+  '                "ig": ig_m[0],',
+  '                "iid": iid_m[-1],',
+  '                "key": kt_m[0][0],',
+  '                "token": kt_m[0][1],',
+  '                "cookies": sess.cookies.get_dict(),',
+  '                "exp": now + 300.0,',
+  '            }',
+  '            return self._fp_auth',
+  '    def _fp_translate_once(self, chunk, force=False):',
+  '        auth = self._fp_get_auth(force=force)',
+  '        sess = self._fp_session()',
+  '        if auth["cookies"]:',
+  '            sess.cookies.update(auth["cookies"])',
+  '        headers = dict(self.headers)',
+  '        headers["Referer"] = auth["origin"] + "/translator"',
+  '        headers["Origin"] = auth["origin"]',
+  '        r = sess.post(',
+  '            f\'{auth["origin"]}/ttranslatev3?isVertical=1&IG={auth["ig"]}&IID={auth["iid"]}\',',
+  '            data={',
+  '                "fromLang": self.lang_in,',
+  '                "to": self.lang_out,',
+  '                "text": chunk,',
+  '                "token": auth["token"],',
+  '                "key": auth["key"],',
+  '            },',
+  '            headers=headers,',
+  '            timeout=30,',
+  '        )',
+  '        r.raise_for_status()',
+  '        data = r.json()',
+  '        tr = data[0]["translations"][0]["text"]',
+  '        if not tr:',
+  '            raise RuntimeError("Bing returned empty translation")',
+  '        return tr',
+  '    def patched_do_translate(self, text):',
+  '        chunks = _fp_split_chunks(text, 900)',
+  '        out = []',
+  '        for chunk in chunks:',
+  '            if not chunk.strip():',
+  '                out.append(chunk)',
+  '                continue',
+  '            last_err = None',
+  '            tr = ""',
+  '            for attempt in range(2):',
+  '                try:',
+  '                    tr = _fp_translate_once(self, chunk, force=(attempt > 0))',
+  '                    break',
+  '                except Exception as exc:',
+  '                    last_err = exc',
+  '            if not tr:',
+  '                raise last_err or RuntimeError("Bing translation failed")',
+  '            out.append(tr)',
+  '        sep = "" if str(self.lang_out or "").lower().startswith(("zh", "ja", "ko")) else " "',
+  '        return sep.join(out)',
+  '    orig_cls.__init__ = patched_init',
+  '    orig_cls.do_translate = patched_do_translate',
+  '',
+  'if __name__ == "__main__":',
+  '    _patch_bing()',
+  '    sys.argv = ["pdf2zh"] + sys.argv[1:]',
+  '    sys.exit(_pdf2zh_main())',
+].join('\n');
+
+function validatePdfLanguages(configSource, detectedLang, targetLang) {
+  const detectedCode = pdfLangCode(detectedLang || 'en');
+  const targetCode = pdfLangCode(targetLang || 'zh-CN');
+  const explicitSrc = Boolean(configSource && configSource !== 'auto');
+  const sourceCode = explicitSrc ? pdfLangCode(configSource) : detectedCode;
+  if (sourceCode === targetCode) {
+    return {
+      ok: false,
+      sourceCode,
+      targetCode,
+      detectedCode,
+      error:
+        '原文语言与译文语言相同（均为 ' +
+        targetCode +
+        '），请在「翻译设置」中调整原文或译文语言。',
+    };
+  }
+  if (explicitSrc && detectedCode === targetCode && detectedCode !== sourceCode) {
+    const dInfo = langInfo(detectedLang) || langInfo(detectedCode);
+    const sInfo = langInfo(configSource);
+    const tInfo = langInfo(targetLang);
+    const dName = (dInfo && dInfo.name) || detectedCode;
+    const sName = (sInfo && sInfo.name) || sourceCode;
+    const tName = (tInfo && tInfo.name) || targetCode;
+    return {
+      ok: false,
+      sourceCode,
+      targetCode,
+      detectedCode,
+      error:
+        '检测到 PDF 原文为「' +
+        dName +
+        '」，与当前译文语言相同（当前设置为 ' +
+        sName +
+        ' → ' +
+        tName +
+        '）。请在「翻译设置」中将原文语言改为「自动检测」并调整译文语言。',
+    };
+  }
+  return { ok: true, sourceCode, targetCode, detectedCode };
+}
+
+async function startPdfTranslate(file, opts) {
+  const o = opts || {};
+  const force = Boolean(o.force);
   const p = String(file || '');
   if (!p) throw Object.assign(new Error('缺少文件路径'), { code: 'bad-request' });
   let st;
@@ -2763,7 +2958,7 @@ async function startPdfTranslate(file) {
   const service = pdfService();
   const key = fileKey(p, service);
   const cached = outputUrls(key);
-  if (cached.dual || cached.mono) {
+  if (!force && (cached.dual || cached.mono)) {
     const job = createJob('pdf', { file: p, key, service, cached: true });
     job.status = 'done';
     job.progress = 100;
@@ -2791,10 +2986,18 @@ async function startPdfTranslate(file) {
   activePdfJob = job;
   job.log.push('引擎：' + exe);
 
-  let source = config.sourceLang;
-  if (!source || source === 'auto') source = await detectPdfLanguage(p);
-  const sourceCode = pdfLangCode(source);
-  const targetCode = pdfLangCode(config.targetLang);
+  const detected = await detectPdfLanguage(p);
+  const langCheck = validatePdfLanguages(config.sourceLang, detected, config.targetLang);
+  if (!langCheck.ok) {
+    job.status = 'error';
+    job.error = langCheck.error;
+    job.endedAt = Date.now();
+    activePdfJob = null;
+    throw Object.assign(new Error(langCheck.error), { code: 'lang-mismatch' });
+  }
+
+  const sourceCode = langCheck.sourceCode;
+  const targetCode = langCheck.targetCode;
   job.meta.source = sourceCode;
   job.meta.target = targetCode;
   job.log.push('语言：' + sourceCode + ' → ' + targetCode);
@@ -2803,12 +3006,21 @@ async function startPdfTranslate(file) {
       (service === 'google'
         ? 'Google 免费翻译'
         : service === 'bing'
-          ? 'Bing 免费翻译'
+          ? 'Bing 免费翻译（长段自动分块）'
           : 'OpenAI 兼容接口')
   );
   // 检测期间可能已被取消/应用退出
   if (job.status !== 'running') {
     return { job: publicJob(job), output: outputUrls(key) };
+  }
+
+  if (force) {
+    const oldOut = findOutputs(key);
+    for (const oldFile of [oldOut.dual, oldOut.mono]) {
+      if (oldFile) {
+        try { fs.unlinkSync(oldFile); } catch (_) { /* ignore */ }
+      }
+    }
   }
 
   const args = [
@@ -2822,6 +3034,7 @@ async function startPdfTranslate(file) {
     '-s',
     service,
   ];
+  if (force) args.push('--ignore-cache');
   if (config.pdf.extraArgs) {
     for (const a of splitArgs(config.pdf.extraArgs)) {
       if (a) args.push(a);
@@ -2839,9 +3052,19 @@ async function startPdfTranslate(file) {
     env.OPENAI_MODEL = config.openai.model || 'deepseek-chat';
   }
 
+  let spawnCmd = exe;
+  let spawnArgs = args;
+  if (service === 'bing') {
+    const py = findPdf2zhPython();
+    if (py) {
+      spawnCmd = py;
+      spawnArgs = ['-u', '-c', PDF2ZH_WRAPPER_SCRIPT, ...args];
+    }
+  }
+
   let child;
   try {
-    child = cp.spawn(exe, args, { cwd: outDir, env, windowsHide: true });
+    child = cp.spawn(spawnCmd, spawnArgs, { cwd: outDir, env, windowsHide: true });
   } catch (e) {
     job.status = 'error';
     job.error = e.message;
@@ -3044,7 +3267,10 @@ module.exports = {
   engineInfo,
   findUv,
   findPdf2zh,
+  findPdf2zhPython,
   findEdgeTts,
   findEdgeTtsPython,
   invalidateToolCache,
+  validatePdfLanguages,
+  PDF2ZH_WRAPPER_SCRIPT,
 };
