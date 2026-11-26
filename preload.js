@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('readerNative', {
 
   appInfo: () => ipcRenderer.invoke('reader:app-info'),
 
+  /** 读取操作系统「文本大小」缩放比例（默认 1） */
+  systemTextScale: () => ipcRenderer.invoke('reader:system-text-scale'),
+
   /**
    * 菜单「视图」里触发的阅读视图动作（字号/宽度/翻译设置）。返回取消订阅函数。
    */

@@ -1253,7 +1253,7 @@ async function handleRequest(req, res) {
       return sendJson(res, 400, { error: e.message });
     }
     try {
-      const r = await translator.startPdfTranslate(body.path);
+      const r = await translator.startPdfTranslate(body.path, { force: Boolean(body.force) });
       return sendJson(res, 200, r);
     } catch (e) {
       const code = e && e.code;

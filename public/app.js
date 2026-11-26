@@ -229,12 +229,17 @@
     docLang: '',
     activeBlobUrl: '',
     activeBlobUrls: [],
-    isWebLocalFile: false
+    isWebLocalFile: false,
+    systemTextScale: 1,
+    pdfZoom: 100,
+    onPdfZoomChanged: null,
+    onPdfConfigChanged: null
   };
 
   const LS = {
     theme: 'media-reader/theme',
     font: 'media-reader/font',
+    pdfZoom: 'media-reader/pdfZoom',
     wide: 'media-reader/wide',
     tocOff: 'media-reader/tocOff',
     lastRoot: 'media-reader/lastRoot',
@@ -355,6 +360,7 @@
   }
 
   const FONT_STEPS = [16, 17, 18, 20, 22];
+  const PDF_ZOOM_STEPS = [75, 90, 100, 115, 130, 150, 175, 200];
 
   /** 支持的原文/译文语言（与 translator.js 保持一致） */
   const LANGS = [
@@ -695,6 +701,9 @@
     stopTts();
     resetBilingual();
     cleanupActiveMedia();
+    document.body.classList.remove('pdf-view');
+    state.onPdfZoomChanged = null;
+    state.onPdfConfigChanged = null;
     state.translatable = false;
     state.docLang = '';
     state.isWebLocalFile = false;
@@ -828,6 +837,9 @@
     stopTts();
     resetBilingual();
     cleanupActiveMedia();
+    document.body.classList.remove('pdf-view');
+    state.onPdfZoomChanged = null;
+    state.onPdfConfigChanged = null;
     state.translatable = false;
     state.docLang = '';
     state.isWebLocalFile = true;
@@ -1400,15 +1412,47 @@
 
   /* ---------------------------------------------------------------- PDF */
 
+  function effectivePdfZoom() {
+    const base = Number(state.pdfZoom) || 100;
+    const sys = Number(state.systemTextScale) || 1;
+    return Math.max(50, Math.min(300, Math.round(base * sys)));
+  }
+
+  function buildPdfFrameUrl(baseUrl, zoomPct, bustToken) {
+    const raw = String(baseUrl || '');
+    if (!raw) return '';
+    const z = Math.max(50, Math.min(300, Math.round(Number(zoomPct) || 100)));
+    if (raw.startsWith('blob:')) {
+      return raw.replace(/#.*$/, '') + '#zoom=' + z;
+    }
+    try {
+      const u = new URL(raw, location.origin);
+      u.searchParams.set('_z', String(z));
+      if (bustToken) u.searchParams.set('_t', String(bustToken));
+      else u.searchParams.delete('_t');
+      u.hash = 'zoom=' + z;
+      return u.toString();
+    } catch (_) {
+      return raw.replace(/#.*$/, '') + '#zoom=' + z;
+    }
+  }
+
   function renderPdf(filePath) {
+    document.body.classList.add('pdf-view');
     const c = $('#content');
     const url = rawUrl(filePath);
+    const initZoom = effectivePdfZoom();
     const wrap = document.createElement('div');
     wrap.className = 'pdf-wrap';
     wrap.innerHTML =
       '<div class="pdf-bar">' +
       '<span class="pdf-name">' + escapeHtml(baseName(filePath)) + '</span>' +
       '<div class="pdf-actions">' +
+      '<span class="pdf-zoom-group" title="缩放 PDF（或使用 视图 → 增大/减小字号）">' +
+      '<button type="button" class="btn btn-mini" id="pdf-zoom-dec" aria-label="缩小 PDF">A-</button>' +
+      '<span class="pdf-zoom-val" id="pdf-zoom-val">' + initZoom + '%</span>' +
+      '<button type="button" class="btn btn-mini" id="pdf-zoom-inc" aria-label="放大 PDF">A+</button>' +
+      '</span>' +
       '<button class="btn btn-mini" id="pdf-read">🔊 朗读</button>' +
       '<button class="btn btn-mini btn-primary" id="pdf-translate">双语翻译</button>' +
       '<span class="pdf-modes" id="pdf-modes" hidden>' +
@@ -1426,7 +1470,7 @@
       '</div>' +
       '<pre class="pdf-log" id="pdf-log" hidden></pre>' +
       '<div class="pdf-frames" id="pdf-frames">' +
-      '<iframe class="pdf-frame active" data-frame="src" src="' + escapeAttr(url) + '"></iframe>' +
+      '<iframe class="pdf-frame active" data-frame="src" data-zoom="' + initZoom + '" data-version="0" src="' + escapeAttr(buildPdfFrameUrl(url, initZoom)) + '"></iframe>' +
       '</div>';
     c.innerHTML = '';
     c.appendChild(wrap);
@@ -1436,6 +1480,11 @@
     const btn = $('#pdf-translate');
     const readBtn = $('#pdf-read');
     if (readBtn) readBtn.addEventListener('click', startArticle);
+    const zoomDecBtn = $('#pdf-zoom-dec');
+    const zoomIncBtn = $('#pdf-zoom-inc');
+    const zoomValEl = $('#pdf-zoom-val');
+    if (zoomDecBtn) zoomDecBtn.addEventListener('click', () => stepPdfZoom(-1));
+    if (zoomIncBtn) zoomIncBtn.addEventListener('click', () => stepPdfZoom(1));
     const modes = $('#pdf-modes');
     const progress = $('#pdf-progress');
     const fill = $('#pdf-progress-fill');
@@ -1444,6 +1493,9 @@
     const cancelBtn = $('#pdf-cancel');
     const newWinBtn = $('#pdf-new-window');
     let current = { src: url, dual: '', mono: '' };
+    let currentMode = 'src';
+    let hasTranslated = false;
+    let renderVersion = 0;
     let cancelled = false;
     let currentJobId = '';
 
@@ -1455,26 +1507,43 @@
      * 每切一次就重新加载并跳回第一页，读到一半切回原文非常难受。
      */
     function frameFor(name) {
+      const z = effectivePdfZoom();
+      const targetUrl = buildPdfFrameUrl(current[name] || url, z, name === 'src' ? '' : renderVersion);
       let f = null;
       $$('.pdf-frame', frames).forEach((x) => { if (x.dataset.frame === name) f = x; });
       if (!f) {
         f = document.createElement('iframe');
         f.className = 'pdf-frame';
         f.dataset.frame = name;
-        f.src = current[name] || url;
+        f.dataset.zoom = String(z);
+        f.dataset.version = String(renderVersion);
+        f.src = targetUrl;
         frames.appendChild(f);
-      } else if (!f.getAttribute('src') && current[name]) {
-        f.src = current[name];
+      } else if (
+        f.dataset.zoom !== String(z) ||
+        (name !== 'src' && f.dataset.version !== String(renderVersion)) ||
+        !(f.src || (typeof f.getAttribute === 'function' && f.getAttribute('src')))
+      ) {
+        f.dataset.zoom = String(z);
+        f.dataset.version = String(renderVersion);
+        f.src = targetUrl;
       }
       return f;
     }
 
     function setMode(name) {
       if (name !== 'src' && !current[name]) name = 'src';
+      currentMode = name;
       const active = frameFor(name);
       $$('.pdf-frame', frames).forEach((x) => x.classList.toggle('active', x === active));
       $$('button', modes).forEach((b) => b.classList.toggle('active', b.dataset.mode === name));
     }
+
+    state.onPdfZoomChanged = (z) => {
+      if (!alive()) return;
+      if (zoomValEl) zoomValEl.textContent = z + '%';
+      setMode(currentMode);
+    };
 
     $$('button', modes).forEach((b) => {
       b.addEventListener('click', () => setMode(b.dataset.mode));
@@ -1495,11 +1564,13 @@
       log.scrollTop = log.scrollHeight;
     }
 
-    function finish(output) {
+    function finish(output, forced) {
       progress.hidden = true;
       cancelBtn.hidden = true;
       btn.disabled = false;
       btn.textContent = '重新翻译';
+      hasTranslated = true;
+      if (forced) renderVersion++;
       if (output) {
         current.dual = output.dual || current.dual;
         current.mono = output.mono || current.mono;
@@ -1513,7 +1584,7 @@
       }
     }
 
-    async function poll(jobId) {
+    async function poll(jobId, forced) {
       currentJobId = jobId || '';
       let errors = 0;
       const tick = async () => {
@@ -1531,11 +1602,11 @@
             return;
           }
           if (r.job.status === 'done') {
-            finish(r.output);
+            finish(r.output, forced);
             return;
           }
           btn.disabled = false;
-          btn.textContent = '重试翻译';
+          btn.textContent = hasTranslated ? '重新翻译' : '重试翻译';
           ptext.textContent = '翻译失败';
           cancelBtn.hidden = true;
           log.hidden = false;
@@ -1548,7 +1619,7 @@
             progress.hidden = true;
             cancelBtn.hidden = true;
             btn.disabled = false;
-            btn.textContent = '重试翻译';
+            btn.textContent = hasTranslated ? '重新翻译' : '重试翻译';
             toast('翻译状态获取失败：' + e.message, 'err');
             return;
           }
@@ -1559,6 +1630,7 @@
     }
 
     async function startTranslate() {
+      const force = hasTranslated;
       cancelled = false;
       btn.disabled = true;
       btn.textContent = '翻译中…';
@@ -1569,19 +1641,19 @@
       ptext.textContent = '准备中…';
       log.textContent = '';
       try {
-        const r = await apiPost('/api/pdf-translate', { path: filePath });
+        const r = await apiPost('/api/pdf-translate', { path: filePath, force: force });
         if (!alive()) return;
         if (r.job && r.job.id) currentJobId = r.job.id;
         if (r.output) {
           current.dual = r.output.dual || '';
           current.mono = r.output.mono || '';
         }
-        if (r.cached) {
+        if (r.cached && !force) {
           paintJob(r.job);
-          finish(r.output);
+          finish(r.output, false);
           return;
         }
-        poll(r.job.id);
+        poll(r.job.id, force);
       } catch (e) {
         if (!alive()) return;
         const data = e.data || {};
@@ -1589,21 +1661,29 @@
         if (data.code === 'engine-missing') {
           progress.hidden = true;
           btn.disabled = false;
-          btn.textContent = '双语翻译';
+          btn.textContent = hasTranslated ? '重新翻译' : '双语翻译';
           toast('还没安装 PDF 翻译引擎，正在打开设置…', 'warn');
           openTranslateSettings(true);
+          return;
+        }
+        if (data.code === 'lang-mismatch') {
+          progress.hidden = true;
+          btn.disabled = false;
+          btn.textContent = hasTranslated ? '重新翻译' : '双语翻译';
+          toast(e.message, 'warn');
+          openTranslateSettings(false);
           return;
         }
         if (data.code === 'busy') {
           progress.hidden = true;
           btn.disabled = false;
-          btn.textContent = '双语翻译';
+          btn.textContent = hasTranslated ? '重新翻译' : '双语翻译';
           toast('已有另一个 PDF 正在翻译，请等它完成后再试', 'warn');
           return;
         }
         progress.hidden = true;
         btn.disabled = false;
-        btn.textContent = '重试翻译';
+        btn.textContent = hasTranslated ? '重新翻译' : '重试翻译';
         toast('翻译启动失败：' + e.message, 'err');
       }
     }
@@ -1647,52 +1727,98 @@
       progress.hidden = true;
       cancelBtn.hidden = true;
       btn.disabled = false;
-      btn.textContent = '双语翻译';
+      btn.textContent = hasTranslated ? '重新翻译' : '双语翻译';
       ptext.textContent = '已取消';
       toast('已取消翻译');
     });
 
-    // 重新打开同一份 PDF 时恢复现场：已完成直接给切换按钮，
-    // 还在跑就接着显示进度（以前重开窗口后进度就断了，只能干等或重复提交）
-    api('/api/pdf-translate/current', { path: filePath })
-      .then((r) => {
-        if (!alive() || !r) return;
-        if (r.output && (r.output.dual || r.output.mono)) {
-          current.dual = r.output.dual || '';
-          current.mono = r.output.mono || '';
-          modes.hidden = false;
-          btn.textContent = '重新翻译';
-          setMode(current.dual ? 'dual' : 'mono');
-        }
-        if (r.job && r.job.status === 'running') {
-          if (r.job.id) currentJobId = r.job.id;
-          btn.disabled = true;
-          btn.textContent = '翻译中…';
-          progress.hidden = false;
-          cancelBtn.hidden = false;
-          paintJob(r.job);
-          poll(r.job.id);
-        }
-      })
-      .catch(() => { /* 查不到状态不影响阅读 */ });
+    function refreshPdfState() {
+      current.dual = '';
+      current.mono = '';
+      hasTranslated = false;
+      renderVersion++;
+      $$('.pdf-frame', frames).forEach((x) => {
+        if (x.dataset.frame !== 'src') x.remove();
+      });
+      modes.hidden = true;
+      progress.hidden = true;
+      cancelBtn.hidden = true;
+      btn.disabled = false;
+      btn.textContent = '双语翻译';
+      setMode('src');
+
+      // 重新打开同一份 PDF 或修改语言/服务设置后恢复现场：已完成直接给切换按钮，
+      // 还在跑就接着显示进度
+      api('/api/pdf-translate/current', { path: filePath })
+        .then((r) => {
+          if (!alive() || !r) return;
+          if (r.output && (r.output.dual || r.output.mono)) {
+            current.dual = r.output.dual || '';
+            current.mono = r.output.mono || '';
+            hasTranslated = true;
+            modes.hidden = false;
+            btn.textContent = '重新翻译';
+            setMode(current.dual ? 'dual' : 'mono');
+          }
+          if (r.job && r.job.status === 'running') {
+            if (r.job.id) currentJobId = r.job.id;
+            btn.disabled = true;
+            btn.textContent = '翻译中…';
+            progress.hidden = false;
+            cancelBtn.hidden = false;
+            paintJob(r.job);
+            poll(r.job.id, false);
+          }
+        })
+        .catch(() => { /* 查不到状态不影响阅读 */ });
+    }
+
+    state.onPdfConfigChanged = refreshPdfState;
+    refreshPdfState();
   }
 
   function renderLocalPdfBlob(fileName, blobUrl) {
+    document.body.classList.add('pdf-view');
     const c = $('#content');
+    const initZoom = effectivePdfZoom();
     const wrap = document.createElement('div');
     wrap.className = 'pdf-wrap';
     wrap.innerHTML =
       '<div class="pdf-bar">' +
       '<span class="pdf-name">' + escapeHtml(fileName) + '（浏览器本地预览）</span>' +
       '<div class="pdf-actions">' +
+      '<span class="pdf-zoom-group" title="缩放 PDF（或使用 视图 → 增大/减小字号）">' +
+      '<button type="button" class="btn btn-mini" id="pdf-zoom-dec" aria-label="缩小 PDF">A-</button>' +
+      '<span class="pdf-zoom-val" id="pdf-zoom-val">' + initZoom + '%</span>' +
+      '<button type="button" class="btn btn-mini" id="pdf-zoom-inc" aria-label="放大 PDF">A+</button>' +
+      '</span>' +
       '<span class="muted">本地预览模式（如需服务端双语翻译，请使用桌面版打开该文件）</span>' +
       '</div></div>' +
       '<div class="pdf-frames" id="pdf-frames">' +
-      '<iframe class="pdf-frame active" data-frame="src" src="' + escapeAttr(blobUrl) + '"></iframe>' +
+      '<iframe class="pdf-frame active" data-frame="src" data-zoom="' + initZoom + '" src="' + escapeAttr(buildPdfFrameUrl(blobUrl, initZoom)) + '"></iframe>' +
       '</div>';
     c.innerHTML = '';
     c.appendChild(wrap);
     clearToc();
+
+    const frames = $('#pdf-frames');
+    const zoomDecBtn = $('#pdf-zoom-dec');
+    const zoomIncBtn = $('#pdf-zoom-inc');
+    const zoomValEl = $('#pdf-zoom-val');
+    if (zoomDecBtn) zoomDecBtn.addEventListener('click', () => stepPdfZoom(-1));
+    if (zoomIncBtn) zoomIncBtn.addEventListener('click', () => stepPdfZoom(1));
+
+    state.onPdfZoomChanged = (z) => {
+      if (state.currentFile !== fileName) return;
+      if (zoomValEl) zoomValEl.textContent = z + '%';
+      const nf = document.createElement('iframe');
+      nf.className = 'pdf-frame active';
+      nf.dataset.frame = 'src';
+      nf.dataset.zoom = String(z);
+      nf.src = buildPdfFrameUrl(blobUrl, z);
+      frames.innerHTML = '';
+      frames.appendChild(nf);
+    };
   }
 
   /* ---------------------------------------------------------------- Word */
@@ -2906,6 +3032,7 @@
   async function saveTranslateSettings() {
     const oldTarget = (transCfg && transCfg.targetLang) || 'zh-CN';
     const oldSource = (transCfg && transCfg.sourceLang) || 'auto';
+    const oldService = (transCfg && transCfg.service) || 'bing';
     const hasKey = !!(transCfg && transCfg.openai && transCfg.openai.hasKey);
     const typedKey = ($('#tm-key').value || '').trim();
 
@@ -2937,7 +3064,11 @@
       });
       ttsCfg = Object.assign({}, ttsCfg, patch.tts);
 
-      if (patch.targetLang !== oldTarget || patch.sourceLang !== oldSource) {
+      const changedLangOrSvc =
+        patch.targetLang !== oldTarget ||
+        patch.sourceLang !== oldSource ||
+        patch.service !== oldService;
+      if (changedLangOrSvc) {
         stopTts();
         bi.cache.clear();
         clearBilingualDom();
@@ -2948,7 +3079,12 @@
         state.docLang = '';
         if (patch.sourceLang !== 'auto') state.docLang = patch.sourceLang;
         else detectDocLanguage($('#content').textContent, state.currentFile);
-        toast('语言设置已保存，重新点「双语」即可生成新译文');
+        if (typeof state.onPdfConfigChanged === 'function') {
+          state.onPdfConfigChanged();
+          toast('翻译设置已保存，请重新点「双语翻译」生成对应译文');
+        } else {
+          toast('语言设置已保存，重新点「双语」即可生成新译文');
+        }
       } else {
         toast('翻译与语音设置已保存');
       }
@@ -4624,13 +4760,56 @@
   }
 
   function applyFont(size) {
-    document.documentElement.style.setProperty('--font-size', size + 'px');
+    document.documentElement.style.setProperty('--font-size-base', size + 'px');
     const label = $('#font-label');
     if (label) label.textContent = String(size);
     localStorage.setItem(LS.font, String(size));
   }
 
+  function applySystemTextScale(scale) {
+    const n = Number(scale);
+    const clamped = Number.isFinite(n) && n > 0 ? Math.max(0.8, Math.min(2.25, n)) : 1;
+    state.systemTextScale = clamped;
+    document.documentElement.style.setProperty('--text-scale', String(clamped));
+    if (typeof state.onPdfZoomChanged === 'function') {
+      state.onPdfZoomChanged(effectivePdfZoom());
+    }
+    return clamped;
+  }
+
+  function applyPdfZoom(pct, silent) {
+    const n = parseInt(pct, 10);
+    const val = PDF_ZOOM_STEPS.indexOf(n) >= 0 ? n : 100;
+    state.pdfZoom = val;
+    try { localStorage.setItem(LS.pdfZoom, String(val)); } catch (_) { /* ignore */ }
+    if (typeof state.onPdfZoomChanged === 'function') {
+      state.onPdfZoomChanged(effectivePdfZoom());
+    }
+    if (!silent) {
+      toast('PDF 缩放：' + effectivePdfZoom() + '%');
+    }
+    return val;
+  }
+
+  function stepPdfZoom(delta) {
+    const cur = parseInt(state.pdfZoom || 100, 10);
+    const curIdx = PDF_ZOOM_STEPS.indexOf(cur);
+    const baseIdx = curIdx >= 0 ? curIdx : PDF_ZOOM_STEPS.indexOf(100);
+    const nextIdx = Math.max(0, Math.min(PDF_ZOOM_STEPS.length - 1, baseIdx + delta));
+    const next = PDF_ZOOM_STEPS[nextIdx];
+    applyPdfZoom(next, true);
+    if (nextIdx === baseIdx) {
+      toast((delta > 0 ? '已是最大缩放（' : '已是最小缩放（') + effectivePdfZoom() + '%）');
+    } else {
+      toast('PDF 缩放：' + effectivePdfZoom() + '%');
+    }
+    return next;
+  }
+
   function stepFont(delta) {
+    if (document.body.classList.contains('pdf-view')) {
+      return stepPdfZoom(delta);
+    }
     const cur = parseInt(localStorage.getItem(LS.font) || '18', 10);
     const curIdx = FONT_STEPS.indexOf(cur);
     const baseIdx = curIdx >= 0 ? curIdx : FONT_STEPS.indexOf(18);
@@ -4642,6 +4821,7 @@
     } else {
       toast('字号：' + next + 'px');
     }
+    return next;
   }
 
   function applyWide(wide) {
@@ -4675,6 +4855,17 @@
     let size = parseInt(localStorage.getItem(LS.font) || '18', 10);
     if (FONT_STEPS.indexOf(size) < 0) size = 18;
     applyFont(size);
+
+    let zoom = parseInt(localStorage.getItem(LS.pdfZoom) || '100', 10);
+    if (PDF_ZOOM_STEPS.indexOf(zoom) < 0) zoom = 100;
+    state.pdfZoom = zoom;
+
+    const native = window.readerNative;
+    if (native && typeof native.systemTextScale === 'function') {
+      Promise.resolve(native.systemTextScale())
+        .then((s) => applySystemTextScale(s))
+        .catch(() => {});
+    }
 
     applyWide(localStorage.getItem(LS.wide) === '1');
     applyTocOff(localStorage.getItem(LS.tocOff) === '1');
@@ -5148,6 +5339,9 @@
 
   /** 没有可打开的文件时的首页；也用于清理失效的「上次阅读」 */
   function showWelcome() {
+    document.body.classList.remove('pdf-view');
+    state.onPdfZoomChanged = null;
+    state.onPdfConfigChanged = null;
     state.currentFile = '';
     const crumb = $('#crumb');
     if (crumb) {
@@ -5177,6 +5371,9 @@
       translate: function () { return translateCurrent(); }
     },
     openTranslateSettings: openTranslateSettings,
+    stepFont: stepFont,
+    stepPdfZoom: stepPdfZoom,
+    applySystemTextScale: applySystemTextScale,
     tts: {
       state: tts,
       get lastMetric() { return tts.lastMetric; },
