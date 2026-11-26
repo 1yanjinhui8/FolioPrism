@@ -992,6 +992,39 @@ body.trans-zh .bi-en.has-trans { display: none; }
   background: var(--bg-subtle); font-weight: 600;
   position: sticky; top: 0; z-index: 1;
 }
+#content .sheet-body td.sheet-img-cell {
+  text-align: center;
+  vertical-align: middle;
+  padding: 6px 8px;
+}
+#content .sheet-body .sheet-cell-img {
+  display: block;
+  max-width: 180px;
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  margin: 0 auto;
+  border-radius: 6px;
+  cursor: zoom-in;
+  background: var(--bg-subtle);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+#content .sheet-body .sheet-cell-img:hover {
+  transform: scale(1.03);
+  box-shadow: var(--shadow-sm);
+}
+#content .sheet-body .sheet-cell-img + .sheet-cell-img {
+  margin-top: 6px;
+}
+#content .sheet-body .sheet-img-fallback {
+  display: inline-block;
+  padding: 4px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
 
 /* 被拦截的危险链接 */
 #content a.link-blocked,

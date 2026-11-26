@@ -228,6 +228,7 @@
     translatable: false,
     docLang: '',
     activeBlobUrl: '',
+    activeBlobUrls: [],
     isWebLocalFile: false
   };
 
@@ -247,6 +248,11 @@
   /** 每次 openFile 自增；异步渲染回来时用它判断自己是否已经过期 */
   let openSeq = 0;
 
+  function registerBlobUrl(url) {
+    if (url) state.activeBlobUrls.push(url);
+    return url;
+  }
+
   function revokeActiveBlobUrl() {
     if (state.activeBlobUrl) {
       try {
@@ -255,6 +261,16 @@
         }
       } catch (_) { /* ignore */ }
       state.activeBlobUrl = '';
+    }
+    if (state.activeBlobUrls.length) {
+      for (const u of state.activeBlobUrls) {
+        try {
+          if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+            URL.revokeObjectURL(u);
+          }
+        } catch (_) { /* ignore */ }
+      }
+      state.activeBlobUrls.length = 0;
     }
   }
 
@@ -1714,9 +1730,319 @@
 
   /* ---------------------------------------------------------------- Excel */
 
+  const XLSX_DISPIMG_RE = /^\s*=?\s*(?:_xlfn\.)?DISPIMG\(\s*["']([^"']+)["'](?:\s*,[^)]*)?\)\s*$/i;
+  const XLSX_IMAGE_MIME = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    avif: 'image/avif'
+  };
+  const XLSX_B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+  function decodeXmlAttr(s) {
+    return String(s || '')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  }
+
+  function readXmlAttr(attrs, names) {
+    const list = Array.isArray(names) ? names : [names];
+    for (const n of list) {
+      const re = new RegExp('(?:^|\\s)' + n + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')', 'i');
+      const m = re.exec(attrs || '');
+      if (m) return decodeXmlAttr(m[1] != null ? m[1] : m[2]);
+    }
+    return '';
+  }
+
+  function normalizeZipPath(p) {
+    const parts = String(p || '').replace(/\\/g, '/').split('/');
+    const out = [];
+    for (const seg of parts) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') {
+        if (out.length) out.pop();
+      } else {
+        out.push(seg);
+      }
+    }
+    return out.join('/');
+  }
+
+  function resolveZipRelative(baseFile, target) {
+    const raw = String(target || '').replace(/\\/g, '/').trim();
+    if (!raw) return '';
+    if (raw.charAt(0) === '/') return normalizeZipPath(raw);
+    const base = normalizeZipPath(baseFile);
+    const slash = base.lastIndexOf('/');
+    const dir = slash >= 0 ? base.slice(0, slash) : '';
+    return normalizeZipPath((dir ? dir + '/' : '') + raw);
+  }
+
+  function relsPathForZipPart(partPath) {
+    const norm = normalizeZipPath(partPath);
+    const slash = norm.lastIndexOf('/');
+    const dir = slash >= 0 ? norm.slice(0, slash) : '';
+    const base = slash >= 0 ? norm.slice(slash + 1) : norm;
+    return (dir ? dir + '/' : '') + '_rels/' + base + '.rels';
+  }
+
+  function toUint8Array(content) {
+    if (!content) return null;
+    if (content instanceof Uint8Array) return content;
+    if (content instanceof ArrayBuffer) return new Uint8Array(content);
+    if (ArrayBuffer.isView(content)) {
+      return new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+    }
+    if (Array.isArray(content) || typeof content.length === 'number') {
+      return new Uint8Array(content);
+    }
+    return null;
+  }
+
+  function readZipEntryText(entry) {
+    if (!entry || !entry.content) return '';
+    if (typeof entry.content === 'string') return entry.content;
+    const bytes = toUint8Array(entry.content);
+    if (!bytes || !bytes.length) return '';
+    if (typeof TextDecoder !== 'undefined') {
+      try {
+        return new TextDecoder('utf-8').decode(bytes);
+      } catch (_) { /* ignore */ }
+    }
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  }
+
+  function parseXmlRels(xml) {
+    const map = new Map();
+    if (!xml) return map;
+    const re = /<(?:\w+:)?Relationship\b([^>]*)\/?>/gi;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      const attrs = m[1] || '';
+      const mode = readXmlAttr(attrs, 'TargetMode');
+      if (/^external$/i.test(mode)) continue;
+      const id = readXmlAttr(attrs, 'Id');
+      const target = readXmlAttr(attrs, 'Target');
+      const type = readXmlAttr(attrs, 'Type');
+      if (id && target) map.set(id, { target, type });
+    }
+    return map;
+  }
+
+  function detectXlsxImageMime(mediaPath, bytes) {
+    const ext = extOf(mediaPath);
+    if (ext && Object.prototype.hasOwnProperty.call(XLSX_IMAGE_MIME, ext)) {
+      return XLSX_IMAGE_MIME[ext];
+    }
+    // 仅对无扩展名或通用二进制后缀做魔数嗅探；拒绝 .svg/.xml 等潜在脚本载体
+    if (!ext || ext === 'bin' || ext === 'dat') {
+      if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+        return 'image/png';
+      }
+      if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+        return 'image/jpeg';
+      }
+      if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+        return 'image/gif';
+      }
+      if (
+        bytes.length >= 12 &&
+        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+      ) {
+        return 'image/webp';
+      }
+      if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+        return 'image/bmp';
+      }
+    }
+    return '';
+  }
+
+  function bytesToBase64(bytes) {
+    let out = '';
+    const len = bytes.length;
+    for (let i = 0; i < len; i += 3) {
+      const b0 = bytes[i];
+      const has1 = i + 1 < len;
+      const has2 = i + 2 < len;
+      const b1 = has1 ? bytes[i + 1] : 0;
+      const b2 = has2 ? bytes[i + 2] : 0;
+      const n = (b0 << 16) | (b1 << 8) | b2;
+      out += XLSX_B64_CHARS[(n >>> 18) & 63];
+      out += XLSX_B64_CHARS[(n >>> 12) & 63];
+      out += has1 ? XLSX_B64_CHARS[(n >>> 6) & 63] : '=';
+      out += has2 ? XLSX_B64_CHARS[n & 63] : '=';
+    }
+    return out;
+  }
+
+  function extractXlsxImages(wb) {
+    const byId = new Map();
+    const bySheetCell = new Map();
+    const zipMap = new Map();
+    const urlCache = new Map();
+
+    if (wb && wb.files && typeof wb.files === 'object') {
+      Object.keys(wb.files).forEach((k) => {
+        const norm = normalizeZipPath(k);
+        if (norm && wb.files[k]) zipMap.set(norm.toLowerCase(), wb.files[k]);
+      });
+    }
+
+    const readZipText = (p) => readZipEntryText(zipMap.get(normalizeZipPath(p).toLowerCase()));
+    const wbRels = parseXmlRels(readZipText('xl/_rels/workbook.xml.rels'));
+
+    // 1) WPS 嵌入式单元格图片（xl/cellimages.xml + xl/_rels/cellimages.xml.rels）
+    let cellImagesPath = '';
+    wbRels.forEach((rel) => {
+      if (!cellImagesPath && /cellimage/i.test(rel.type || '')) {
+        cellImagesPath = resolveZipRelative('xl/workbook.xml', rel.target);
+      }
+    });
+    if (!cellImagesPath) cellImagesPath = 'xl/cellimages.xml';
+
+    const cellImagesXml = readZipText(cellImagesPath);
+    if (cellImagesXml) {
+      const cellImagesRels = parseXmlRels(readZipText(relsPathForZipPart(cellImagesPath)));
+      const cellImgRe = /<(?:\w+:)?cellImage\b[^>]*>([\s\S]*?)<\/(?:\w+:)?cellImage>/gi;
+      let m;
+      while ((m = cellImgRe.exec(cellImagesXml)) !== null) {
+        const block = m[1];
+        const cnv = /<(?:\w+:)?cNvPr\b([^>]*)\/?>/i.exec(block);
+        const blip = /<(?:\w+:)?blip\b([^>]*)\/?>/i.exec(block);
+        if (!cnv || !blip) continue;
+        const id = readXmlAttr(cnv[1], 'name');
+        const descr = readXmlAttr(cnv[1], 'descr');
+        const embed = readXmlAttr(blip[1], ['r:embed', 'embed']);
+        const rel = embed ? cellImagesRels.get(embed) : null;
+        if (id && rel && rel.target) {
+          byId.set(id, { mediaPath: resolveZipRelative(cellImagesPath, rel.target), descr });
+        }
+      }
+    }
+
+    // 兜底：部分 WPS 文件将 ID_* 图片映射放在 drawings XML 中
+    zipMap.forEach((entry, lowerPath) => {
+      if (!/^xl\/drawings\/[^/]+\.xml$/i.test(lowerPath)) return;
+      const xml = readZipEntryText(entry);
+      if (!xml) return;
+      const rels = parseXmlRels(readZipText(relsPathForZipPart(lowerPath)));
+      const picRe = /<(?:\w+:)?pic\b[^>]*>([\s\S]*?)<\/(?:\w+:)?pic>/gi;
+      let m;
+      while ((m = picRe.exec(xml)) !== null) {
+        const block = m[1];
+        const cnv = /<(?:\w+:)?cNvPr\b([^>]*)\/?>/i.exec(block);
+        const blip = /<(?:\w+:)?blip\b([^>]*)\/?>/i.exec(block);
+        if (!cnv || !blip) continue;
+        const id = readXmlAttr(cnv[1], 'name');
+        if (!id || byId.has(id)) continue;
+        const descr = readXmlAttr(cnv[1], 'descr');
+        const embed = readXmlAttr(blip[1], ['r:embed', 'embed']);
+        const rel = embed ? rels.get(embed) : null;
+        if (rel && rel.target) {
+          byId.set(id, { mediaPath: resolveZipRelative(lowerPath, rel.target), descr });
+        }
+      }
+    });
+
+    // 2) 标准 Excel 浮动锚点图（worksheets -> drawings -> media）
+    const wbSheets = (wb && wb.Workbook && Array.isArray(wb.Workbook.Sheets)) ? wb.Workbook.Sheets : [];
+    wbSheets.forEach((s) => {
+      if (!s || !s.name || s.Hidden === 2 || s.name === 'WpsReserved_CellImgList') return;
+      const sheetRel = s.id ? wbRels.get(s.id) : null;
+      if (!sheetRel || !sheetRel.target) return;
+      const sheetXmlPath = resolveZipRelative('xl/workbook.xml', sheetRel.target);
+      const sheetRels = parseXmlRels(readZipText(relsPathForZipPart(sheetXmlPath)));
+      const drawingTargets = [];
+      sheetRels.forEach((rel) => {
+        if (/\/drawing$/i.test(rel.type || '') || /(?:^|\/)drawings\/[^/]+\.xml$/i.test(rel.target || '')) {
+          drawingTargets.push(rel.target);
+        }
+      });
+      if (!drawingTargets.length) return;
+
+      const sheetCellMap = new Map();
+      drawingTargets.forEach((target) => {
+        const drawingPath = resolveZipRelative(sheetXmlPath, target);
+        const drawingXml = readZipText(drawingPath);
+        if (!drawingXml) return;
+        const drawingRels = parseXmlRels(readZipText(relsPathForZipPart(drawingPath)));
+        const anchorRe = /<(?:\w+:)?(oneCellAnchor|twoCellAnchor)\b[^>]*>([\s\S]*?)<\/(?:\w+:)?\1>/gi;
+        let m;
+        while ((m = anchorRe.exec(drawingXml)) !== null) {
+          const block = m[2];
+          const fromMatch = /<(?:\w+:)?from\b[^>]*>([\s\S]*?)<\/(?:\w+:)?from>/i.exec(block);
+          const blip = /<(?:\w+:)?blip\b([^>]*)\/?>/i.exec(block);
+          if (!fromMatch || !blip) continue;
+          const rowM = /<(?:\w+:)?row\b[^>]*>\s*(\d+)\s*<\/(?:\w+:)?row>/i.exec(fromMatch[1]);
+          const colM = /<(?:\w+:)?col\b[^>]*>\s*(\d+)\s*<\/(?:\w+:)?col>/i.exec(fromMatch[1]);
+          if (!rowM || !colM) continue;
+          const embed = readXmlAttr(blip[1], ['r:embed', 'embed']);
+          const rel = embed ? drawingRels.get(embed) : null;
+          if (!rel || !rel.target) continue;
+          const cnv = /<(?:\w+:)?cNvPr\b([^>]*)\/?>/i.exec(block);
+          const descr = cnv ? (readXmlAttr(cnv[1], 'descr') || readXmlAttr(cnv[1], 'name')) : '';
+          const key = parseInt(rowM[1], 10) + ':' + parseInt(colM[1], 10);
+          if (!sheetCellMap.has(key)) sheetCellMap.set(key, []);
+          sheetCellMap.get(key).push({ mediaPath: resolveZipRelative(drawingPath, rel.target), descr });
+        }
+      });
+      if (sheetCellMap.size) bySheetCell.set(s.name, sheetCellMap);
+    });
+
+    function getUrl(mediaPath) {
+      if (!mediaPath) return '';
+      const key = normalizeZipPath(mediaPath).toLowerCase();
+      if (urlCache.has(key)) return urlCache.get(key);
+      const entry = zipMap.get(key);
+      const bytes = entry ? toUint8Array(entry.content) : null;
+      if (!bytes || !bytes.length) {
+        urlCache.set(key, '');
+        return '';
+      }
+      const mime = detectXlsxImageMime(mediaPath, bytes);
+      if (!mime) {
+        urlCache.set(key, '');
+        return '';
+      }
+      let url = '';
+      if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        url = registerBlobUrl(URL.createObjectURL(new Blob([bytes], { type: mime })));
+      } else {
+        url = 'data:' + mime + ';base64,' + bytesToBase64(bytes);
+      }
+      urlCache.set(key, url);
+      return url;
+    }
+
+    return { byId, bySheetCell, getUrl };
+  }
+
   function renderSheetBuffer(buf, filePath) {
     if (!lib.XLSX) throw new Error('xlsx 库未就绪');
-    const wb = lib.XLSX.read(buf, { type: 'array' });
+    const input = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+    const wb = lib.XLSX.read(input, { type: 'array', bookFiles: true });
+    const sheetImages = extractXlsxImages(wb);
+
+    const hiddenMap = new Map();
+    if (wb.Workbook && Array.isArray(wb.Workbook.Sheets)) {
+      wb.Workbook.Sheets.forEach((s) => {
+        if (s && s.name) hiddenMap.set(s.name, s.Hidden);
+      });
+    }
+    const allSheets = wb.SheetNames || [];
+    const filteredSheets = allSheets.filter((n) => hiddenMap.get(n) !== 2 && n !== 'WpsReserved_CellImgList');
+    const visibleSheets = filteredSheets.length ? filteredSheets : allSheets;
 
     const c = $('#content');
     c.innerHTML = '<div class="doc-meta">' + escapeHtml(filePath) + '</div>';
@@ -1729,16 +2055,39 @@
     function show(name) {
       const ws = wb.Sheets[name];
       body.innerHTML = '';
-      if (!ws || !ws['!ref']) {
+      state.lightboxItems = [];
+      let imgIndex = 0;
+
+      const anchoredMap = sheetImages.bySheetCell.get(name) || null;
+      const hasAnchored = !!(anchoredMap && anchoredMap.size);
+
+      if (!ws || (!ws['!ref'] && !hasAnchored)) {
         body.innerHTML = '<div class="muted">此工作表没有可显示的数据</div>';
       } else {
         try {
           const XLSX = lib.XLSX;
-          const range = XLSX.utils.decode_range(ws['!ref']);
+          const baseRange = ws['!ref']
+            ? XLSX.utils.decode_range(ws['!ref'])
+            : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+          let maxR = baseRange.e.r;
+          let maxC = baseRange.e.c;
+          if (hasAnchored) {
+            anchoredMap.forEach((_, k) => {
+              const parts = k.split(':');
+              const ar = parseInt(parts[0], 10);
+              const ac = parseInt(parts[1], 10);
+              if (Number.isFinite(ar) && ar > maxR && ar <= baseRange.e.r + 200) maxR = ar;
+              if (Number.isFinite(ac) && ac > maxC && ac <= baseRange.e.c + 50) maxC = ac;
+            });
+          }
+
           // blankrows 必须保留：行号要和 !merges 的绝对行号对齐
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', blankrows: true });
+          const rows = ws['!ref']
+            ? XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '', blankrows: true })
+            : [];
           const merges = Array.isArray(ws['!merges']) ? ws['!merges'] : [];
-          const colCount = range.e.c - range.s.c + 1;
+          const colCount = maxC - baseRange.s.c + 1;
+          const rowCount = maxR - baseRange.s.r + 1;
 
           // 先记录合并区域，再逐格建 DOM。绝不把 sheet_to_html 的字符串塞进
           // innerHTML：它对 data-v 属性里的双引号不转义，可以逃逸出属性注入 HTML。
@@ -1748,25 +2097,74 @@
             if (!m || !m.s || !m.e) return;
             spans.set(m.s.r + ':' + m.s.c, { rs: m.e.r - m.s.r + 1, cs: m.e.c - m.s.c + 1 });
             for (let r = m.s.r; r <= m.e.r; r++) {
-              for (let c = m.s.c; c <= m.e.c; c++) {
-                if (r !== m.s.r || c !== m.s.c) covered.add(r + ':' + c);
+              for (let col = m.s.c; col <= m.e.c; col++) {
+                if (r !== m.s.r || col !== m.s.c) covered.add(r + ':' + col);
               }
             }
           });
 
+          function appendSheetImage(td, info, caption, fallbackLabel) {
+            const url = info ? sheetImages.getUrl(info.mediaPath) : '';
+            if (!url) {
+              const miss = document.createElement('span');
+              miss.className = 'sheet-img-fallback';
+              miss.textContent = '图片无法显示';
+              if (fallbackLabel) miss.title = String(fallbackLabel);
+              td.appendChild(miss);
+              return;
+            }
+            td.classList.add('sheet-img-cell');
+            const img = document.createElement('img');
+            img.className = 'sheet-cell-img';
+            img.src = url;
+            img.alt = caption || '';
+            img.loading = imgIndex++ < 6 ? 'eager' : 'lazy';
+            img.decoding = 'async';
+            img.addEventListener('load', () => img.classList.add('loaded'), { once: true });
+            img.addEventListener('error', () => {
+              const miss = document.createElement('span');
+              miss.className = 'sheet-img-fallback';
+              miss.textContent = '图片加载失败';
+              if (img.parentNode) img.replaceWith(miss);
+            }, { once: true });
+            const lbIdx = state.lightboxItems.push({ src: url, caption: caption || '' }) - 1;
+            bindZoom(img, lbIdx);
+            td.appendChild(img);
+          }
+
           const table = document.createElement('table');
           table.className = 'sheet-table';
-          rows.forEach((row, ri) => {
-            const rAbs = range.s.r + ri;
+          for (let ri = 0; ri < rowCount; ri++) {
+            const row = rows[ri];
+            const rAbs = baseRange.s.r + ri;
             const tr = document.createElement('tr');
             for (let ci = 0; ci < colCount; ci++) {
-              const cAbs = range.s.c + ci;
+              const cAbs = baseRange.s.c + ci;
               const key = rAbs + ':' + cAbs;
               if (covered.has(key)) continue;
               const td = document.createElement('td');
               const val = row ? row[ci] : '';
-              td.textContent = val == null ? '' : String(val);
-              if (rAbs === range.s.r) td.classList.add('sheet-head');
+              const cellAddr = XLSX.utils.encode_cell({ r: rAbs, c: cAbs });
+              const rawCell = ws[cellAddr];
+              const dispMatch =
+                (rawCell && rawCell.f && XLSX_DISPIMG_RE.exec(String(rawCell.f))) ||
+                (val != null && XLSX_DISPIMG_RE.exec(String(val)));
+
+              if (dispMatch) {
+                const dispId = dispMatch[1];
+                const info = sheetImages.byId.get(dispId);
+                appendSheetImage(td, info, (info && info.descr) || (name + ' · ' + cellAddr), dispId);
+              } else {
+                td.textContent = val == null ? '' : String(val);
+              }
+
+              if (anchoredMap && anchoredMap.has(key)) {
+                anchoredMap.get(key).forEach((item) => {
+                  appendSheetImage(td, item, item.descr || (name + ' · ' + cellAddr), item.mediaPath);
+                });
+              }
+
+              if (rAbs === baseRange.s.r) td.classList.add('sheet-head');
               const sp = spans.get(key);
               if (sp) {
                 if (sp.rs > 1) td.rowSpan = sp.rs;
@@ -1775,7 +2173,7 @@
               tr.appendChild(td);
             }
             table.appendChild(tr);
-          });
+          }
           body.appendChild(table);
         } catch (e) {
           body.innerHTML = '<div class="muted">此工作表无法渲染：' + escapeHtml(e.message) + '</div>';
@@ -1784,7 +2182,7 @@
       $$('.sheet-tab', tabs).forEach((t) => t.classList.toggle('active', t.dataset.name === name));
     }
 
-    (wb.SheetNames || []).forEach((name) => {
+    visibleSheets.forEach((name) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'sheet-tab';
@@ -1796,7 +2194,7 @@
 
     c.appendChild(tabs);
     c.appendChild(body);
-    if (wb.SheetNames && wb.SheetNames.length) show(wb.SheetNames[0]);
+    if (visibleSheets.length) show(visibleSheets[0]);
     clearToc();
   }
 

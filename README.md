@@ -29,7 +29,7 @@
 - **Multi-Format Rendering**
   - **Markdown (`.md`, `.markdown`)**: GitHub-flavored rendering (`marked`), syntax-highlighted code blocks with one-click copy (`highlight.js`), auto-generated table of contents, and clickable relative links between local files.
   - **PDF (`.pdf`)**: Built-in PDF viewer with layout-preserving bilingual translation powered by [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate) (`pdf2zh`), keeping formulas, charts, and tables intact. Independent iframes for **Original / Dual / Mono** modes preserve your scroll position when switching views.
-  - **Office & Data**: `.docx` rendering (`mammoth`), multi-sheet `.xlsx` / `.xls` / `.csv` tables (`SheetJS`), and sanitized `.html` / `.htm`. (`.pptx` is recognized for download/external launch rather than inline preview.)
+  - **Office & Data**: `.docx` rendering (`mammoth`); multi-sheet `.xlsx` / `.xls` / `.csv` tables (`SheetJS`), including WPS embedded cell images (`=DISPIMG(...)`) and standard Excel floating images anchored to their cells; and sanitized `.html` / `.htm`. (`.pptx` is recognized for download/external launch rather than inline preview.)
   - **Code, Configs & Special Files**: 45+ programming and config formats, plus dotfiles (`.gitignore`, `.env`, `.env.*`, `.editorconfig`, `.npmrc`, etc.) and extensionless project files (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `CHANGELOG`), with automatic encoding detection (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE/BE`, `GBK`, `Latin1`, up to 32 MB) and a unified format registry (`public/formats.js`) shared between the native file dialog, HTTP server, and renderer.
 - **Rich Media, Audio & Video Integration**
   - Resolves relative & remote images in Markdown with lazy loading and a full-screen **Lightbox** (zoom, pan, prev/next).
@@ -196,7 +196,7 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
 - **多格式文档渲染**
   - **Markdown（`.md` / `.markdown`）**：支持 GFM 排版（`marked`）、代码语法高亮与一键复制（`highlight.js`）、自动生成右侧大纲目录，以及文档间相对路径跳转。
   - **PDF（`.pdf`）**：内置阅读器并集成开源项目 [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate)（`pdf2zh`），生成保留原版排版的双语 / 纯译文 PDF，公式、图表、表格留在原位；**原文 / 双语 / 译文**各自独立使用 `<iframe>`，切换视图不会跳回首页，刷新后也能接回后台翻译进度。
-  - **Office 与网页**：支持 `.docx` 解析（`mammoth`）、多工作表 `.xlsx` / `.xls` / `.csv` 表格预览（`SheetJS`）以及消毒后的 `.html` / `.htm`。（`.pptx` 识别后提供下载与路径复制卡片，不做内联渲染。）
+  - **Office 与网页**：支持 `.docx` 解析（`mammoth`）、多工作表 `.xlsx` / `.xls` / `.csv` 表格预览（`SheetJS`，含 WPS 嵌入式单元格图片 `=DISPIMG(...)` 与标准 Excel 浮动锚点图片）以及消毒后的 `.html` / `.htm`。（`.pptx` 识别后提供下载与路径复制卡片，不做内联渲染。）
   - **代码、配置与特殊文件**：通过前后端共享的统一格式注册表（`public/formats.js`）支持 45+ 种编程语言与配置文件、常见点文件（`.gitignore`、`.env`、`.env.*`、`.editorconfig`、`.npmrc` 等）以及无扩展名工程文件（`Makefile`、`Dockerfile`、`LICENSE`、`README`、`CHANGELOG`），单文件上限 32 MB，自动识别 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE/BE`、`GBK`、`Latin1` 编码，彻底对齐原生文件选择框筛选器与渲染器。
 - **富媒体、音频与视频嵌入**
   - 自动解析 Markdown 中的相对路径图片、远程图片及本地图片兜底目录，支持懒加载与全屏**图片灯箱**（缩放、拖拽、上下张切换）。

@@ -13,7 +13,7 @@
 
 #define AppName "FolioPrism 棱阅"
 #define AppExeName "FolioPrism.exe"
-#define AppVersion "1.5.1"
+#define AppVersion "1.5.2"
 #define AppPublisher "YJH"
 #define AppURL "https://github.com/1yanjinhui8/FolioPrism"
 #define AppProgId "FolioPrism.Document"
@@ -34,8 +34,8 @@ AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}
 
-; exe 文件属性里的版本信息（与 package.json 的 1.5.1 对应）
-VersionInfoVersion=1.5.1.0
+; exe 文件属性里的版本信息（与 package.json 的 1.5.2 对应）
+VersionInfoVersion=1.5.2.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=FolioPrism 棱阅 安装程序
 VersionInfoProductName={#AppName}

@@ -352,13 +352,32 @@ function createDomHarness(opts) {
   }
 
   const files = o.files || {};
+  const rawFiles = o.rawFiles || {};
+  const blobTracker = { n: 0, created: [], revoked: [] };
+  class MockURL extends URL {}
+  if (o.trackBlobs) {
+    MockURL.createObjectURL = (blob) => {
+      const u = 'blob:http://127.0.0.1:7788/mock-' + (++blobTracker.n);
+      blobTracker.created.push({ url: u, type: blob && blob.type, size: blob && blob.size });
+      return u;
+    };
+    MockURL.revokeObjectURL = (u) => {
+      blobTracker.revoked.push(u);
+    };
+  }
+
   const sandbox = {
     console,
     setTimeout,
     clearTimeout,
-    URL,
+    URL: MockURL,
     TextDecoder,
     Uint8Array,
+    Int32Array,
+    Uint16Array,
+    Uint32Array,
+    Float64Array,
+    DataView,
     ArrayBuffer,
     AbortController,
     performance: { now: () => Date.now() },
@@ -395,6 +414,15 @@ function createDomHarness(opts) {
       if (u.pathname === '/api/browse') {
         return { ok: true, status: 200, json: async () => ({ entries: [] }) };
       }
+      if (u.pathname === '/api/raw') {
+        const p = u.searchParams.get('path');
+        const buf = rawFiles[p];
+        if (!buf) {
+          return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+        }
+        const ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        return { ok: true, status: 200, arrayBuffer: async () => ab };
+      }
       if (u.pathname === '/api/read') {
         const p = u.searchParams.get('path');
         const rec = files[p];
@@ -430,6 +458,15 @@ function createDomHarness(opts) {
     matchMedia: () => ({ matches: false, addEventListener() {} }),
   };
 
+  if (o.trackBlobs) {
+    sandbox.Blob = class MockBlob {
+      constructor(parts, opts) {
+        this.parts = parts || [];
+        this.type = (opts && opts.type) || '';
+        this.size = this.parts.reduce((acc, p) => acc + (p ? p.byteLength || p.length || 0 : 0), 0);
+      }
+    };
+  }
   if (o.withHljs) {
     const supported = new Set(o.supportedLangs || ['python', 'py', 'json', 'javascript', 'js']);
     sandbox.hljs = {
@@ -446,6 +483,11 @@ function createDomHarness(opts) {
   if (o.withDomPurify !== false) {
     sandbox.DOMPurify = { sanitize: (html) => html };
   }
+  if (o.withXlsx) {
+    const xlsxCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'vendor', 'xlsx.full.min.js'), 'utf8');
+    sandbox.self = sandbox;
+    vm.runInNewContext(xlsxCode, sandbox, { filename: 'public/vendor/xlsx.full.min.js' });
+  }
 
   sandbox.window = sandbox;
   sandbox.window.addEventListener = () => {};
@@ -453,7 +495,14 @@ function createDomHarness(opts) {
 
   vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
   vm.runInNewContext(code, sandbox, { filename: 'public/app.js' });
-  return { sandbox, content: fixedIds.content, toastBox: fixedIds.toast, hljsCalls };
+  return {
+    sandbox,
+    content: fixedIds.content,
+    toastBox: fixedIds.toast,
+    lightbox: fixedIds.lightbox,
+    hljsCalls,
+    blobTracker,
+  };
 }
 
 test('renderTextFile renders .txt and code files with hljs without insertBefore crash', async () => {
@@ -601,6 +650,218 @@ test('openFile renders dotfiles, extensionless files, audio files, friendly 413 
   assert.equal(content.querySelectorAll('.code-block.file-code').length, 1);
   assert.ok(content.textContent.includes('本地文件预览测试'));
   assert.equal(sandbox.localStorage.getItem('media-reader/lastFile'), prevLastFile, 'Web local File must not overwrite LS.lastFile');
+});
+
+function buildTestXlsxBuffer(opts) {
+  const XLSX = require('xlsx');
+  const pngBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0eQAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const cfb = XLSX.CFB.utils.cfb_new();
+  const add = (p, body) => {
+    XLSX.CFB.utils.cfb_add(cfb, p, Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8'));
+  };
+
+  add('/[Content_Types].xml', [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+    '<Default Extension="xml" ContentType="application/xml"/>',
+    '<Default Extension="png" ContentType="image/png"/>',
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+    '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+    '</Types>',
+  ].join(''));
+
+  add('/_rels/.rels', [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>',
+    '</Relationships>',
+  ].join(''));
+
+  if (opts.mode === 'wps') {
+    add('/xl/workbook.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<sheets>',
+      '<sheet name="Sheet1" sheetId="1" r:id="rId1"/>',
+      '<sheet name="WpsReserved_CellImgList" sheetId="2" state="veryHidden" r:id="rId2"/>',
+      '</sheets>',
+      '</workbook>',
+    ].join(''));
+
+    add('/xl/_rels/workbook.xml.rels', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>',
+      '<Relationship Id="rId3" Type="http://www.wps.cn/officeDocument/2020/cellImage" Target="cellimages.xml"/>',
+      '</Relationships>',
+    ].join(''));
+
+    add('/xl/worksheets/sheet1.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+      '<dimension ref="A1:B4"/>',
+      '<sheetData>',
+      '<row r="1"><c r="A1" t="str"><v>图片案例</v></c><c r="B1" t="str"><v>描述词</v></c></row>',
+      '<row r="2"><c r="A2" t="str"><f>_xlfn.DISPIMG("ID_VALID_1",1)</f><v>=DISPIMG("ID_VALID_1",1)</v></c><c r="B2" t="str"><v>正常嵌入图片</v></c></row>',
+      '<row r="3"><c r="A3" t="str"><f>_xlfn.DISPIMG("ID_EXT_BLOCKED",1)</f><v>=DISPIMG("ID_EXT_BLOCKED",1)</v></c><c r="B3" t="str"><v>外链拦截</v></c></row>',
+      '<row r="4"><c r="A4" t="str"><f>_xlfn.DISPIMG("ID_SVG_BLOCKED",1)</f><v>=DISPIMG("ID_SVG_BLOCKED",1)</v></c><c r="B4" t="str"><v>SVG拦截</v></c></row>',
+      '</sheetData>',
+      '</worksheet>',
+    ].join(''));
+
+    add('/xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>');
+
+    add('/xl/cellimages.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<etc:cellImages xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:etc="http://www.wps.cn/officeDocument/2017/etCustomData">',
+      '<etc:cellImage><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="ID_VALID_1" descr="小橘猫测试图"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill></xdr:pic></etc:cellImage>',
+      '<etc:cellImage><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="ID_EXT_BLOCKED" descr="外链"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/></xdr:blipFill></xdr:pic></etc:cellImage>',
+      '<etc:cellImage><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="4" name="ID_SVG_BLOCKED" descr="SVG"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId3"/></xdr:blipFill></xdr:pic></etc:cellImage>',
+      '</etc:cellImages>',
+    ].join(''));
+
+    add('/xl/_rels/cellimages.xml.rels', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>',
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://evil.example/a.png" TargetMode="External"/>',
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/evil.svg"/>',
+      '</Relationships>',
+    ].join(''));
+
+    add('/xl/media/image1.png', pngBytes);
+    add('/xl/media/evil.svg', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  } else {
+    add('/xl/workbook.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<sheets><sheet name="Photos" sheetId="1" r:id="rId1"/></sheets>',
+      '</workbook>',
+    ].join(''));
+
+    add('/xl/_rels/workbook.xml.rels', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>',
+      '</Relationships>',
+    ].join(''));
+
+    add('/xl/worksheets/sheet1.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+      '<dimension ref="A1:B2"/>',
+      '<sheetData>',
+      '<row r="1"><c r="A1" t="str"><v>图片</v></c><c r="B1" t="str"><v>说明</v></c></row>',
+      '<row r="2"><c r="B2" t="str"><v>浮动锚点图</v></c></row>',
+      '</sheetData>',
+      '<drawing r:id="rId1"/>',
+      '</worksheet>',
+    ].join(''));
+
+    add('/xl/worksheets/_rels/sheet1.xml.rels', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>',
+      '</Relationships>',
+    ].join(''));
+
+    add('/xl/drawings/drawing1.xml', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">',
+      '<xdr:twoCellAnchor>',
+      '<xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>',
+      '<xdr:to><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>',
+      '<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Picture 1" descr="浮动测试图"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill></xdr:pic>',
+      '</xdr:twoCellAnchor>',
+      '</xdr:wsDr>',
+    ].join(''));
+
+    add('/xl/drawings/_rels/drawing1.xml.rels', [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image2.png"/>',
+      '</Relationships>',
+    ].join(''));
+
+    add('/xl/media/image2.png', pngBytes);
+  }
+
+  return XLSX.CFB.write(cfb, { type: 'buffer', fileType: 'zip' });
+}
+
+test('renderSheetBuffer renders WPS DISPIMG images, hides veryHidden sheet, supports lightbox/Web File, and revokes Blobs', async () => {
+  const xlsxBuf = buildTestXlsxBuffer({ mode: 'wps' });
+  const { sandbox, content, lightbox, blobTracker } = createDomHarness({
+    withXlsx: true,
+    trackBlobs: true,
+    rawFiles: { 'D:\\sheets\\wps_cats.xlsx': xlsxBuf },
+    files: { 'D:\\notes\\after.txt': { text: '切走清理 Blob' } },
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const ok = await sandbox.__reader.openFile('D:\\sheets\\wps_cats.xlsx');
+  assert.equal(ok, true);
+  assert.equal(content.querySelectorAll('.err-card').length, 0);
+
+  // 1) 隐藏表 WpsReserved_CellImgList 不应在标签栏中出现
+  const tabs = content.querySelectorAll('.sheet-tab');
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].textContent, 'Sheet1');
+
+  // 2) 合法图片渲染成 img.sheet-cell-img，外链与 SVG 被拦截降级为 .sheet-img-fallback
+  const imgs = content.querySelectorAll('img.sheet-cell-img');
+  assert.equal(imgs.length, 1);
+  assert.ok(String(imgs[0].src).startsWith('blob:http://127.0.0.1:7788/mock-'));
+  assert.equal(imgs[0].alt, '小橘猫测试图');
+  assert.equal(content.querySelectorAll('.sheet-img-fallback').length, 2);
+  assert.equal(content.textContent.includes('=DISPIMG('), false, 'DISPIMG formula text must not remain visible');
+  assert.ok(content.textContent.includes('正常嵌入图片'));
+
+  // 3) 点击表格内图片可打开灯箱
+  imgs[0].click();
+  assert.equal(lightbox.hidden, false);
+  assert.equal(lightbox.querySelector('#lb-img').src, imgs[0].src);
+
+  // 4) 切换到其他文件时应释放之前创建的全部 Blob URL
+  const createdBeforeSwitch = blobTracker.created.map((b) => b.url);
+  assert.equal(createdBeforeSwitch.length, 1);
+  await sandbox.__reader.openFile('D:\\notes\\after.txt');
+  assert.ok(blobTracker.revoked.includes(createdBeforeSwitch[0]), 'switching files must revoke sheet image Blob URLs');
+
+  // 5) Web 本地 File 预览模式同样能渲染 XLSX 内嵌图片
+  const ab = xlsxBuf.buffer.slice(xlsxBuf.byteOffset, xlsxBuf.byteOffset + xlsxBuf.byteLength);
+  const okLocal = await sandbox.__reader.openLocalFile({
+    name: 'local_wps.xlsx',
+    size: xlsxBuf.length,
+    arrayBuffer: async () => ab,
+  });
+  assert.equal(okLocal, true);
+  assert.equal(content.querySelectorAll('img.sheet-cell-img').length, 1);
+  assert.equal(content.textContent.includes('=DISPIMG('), false);
+});
+
+test('renderSheetBuffer renders standard Excel drawing anchor images in corresponding cells', async () => {
+  const xlsxBuf = buildTestXlsxBuffer({ mode: 'drawing' });
+  const { sandbox, content } = createDomHarness({
+    withXlsx: true,
+    trackBlobs: true,
+    rawFiles: { 'D:\\sheets\\drawing_cats.xlsx': xlsxBuf },
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const ok = await sandbox.__reader.openFile('D:\\sheets\\drawing_cats.xlsx');
+  assert.equal(ok, true);
+  const imgs = content.querySelectorAll('img.sheet-cell-img');
+  assert.equal(imgs.length, 1);
+  assert.equal(imgs[0].alt, '浮动测试图');
+  assert.ok(String(imgs[0].src).startsWith('blob:http://127.0.0.1:7788/mock-'));
+  assert.ok(content.textContent.includes('浮动锚点图'));
 });
 
 /* ------------------------------------------------------------------ */
