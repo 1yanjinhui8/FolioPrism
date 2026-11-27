@@ -14,9 +14,9 @@
 
 **[Download for Windows](https://github.com/1yanjinhui8/FolioPrism/releases/latest)** · [English](#english) · [简体中文](#简体中文)
 
-![FolioPrism reading a paper in bilingual mode](assets/hero.gif)
+![FolioPrism reading an English document in bilingual mode](assets/hero.gif)
 
-<sub>English paper → Chinese under every sentence → hover lookup → read aloud. All local.</sub>
+<sub>English document → Chinese under every sentence → hover lookup → read aloud. Your files stay on your machine.</sub>
 
 </div>
 
@@ -32,12 +32,13 @@
 
 - **Multi-Format Rendering**
   - **Markdown (`.md`, `.markdown`)**: GitHub-flavored rendering (`marked`), syntax-highlighted code blocks with one-click copy (`highlight.js`), auto-generated table of contents, and clickable relative links between local files.
-  - **PDF (`.pdf`)**: Built-in PDF viewer with layout-preserving bilingual translation powered by [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate) (`pdf2zh`), keeping formulas, charts, and tables intact. Independent iframes for **Original / Dual / Mono** modes preserve your scroll position when switching views.
+  - **PDF (`.pdf`)**: Built-in PDF viewer with layout-preserving bilingual translation powered by [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate) (`pdf2zh`), preserving the page layout, including formulas, charts, and tables where possible. Independent iframes for **Original / Dual / Mono** modes preserve your scroll position when switching views.
   - **Office & Data**: `.docx` rendering (`mammoth`); multi-sheet `.xlsx` / `.xls` / `.csv` tables (`SheetJS`), including WPS embedded cell images (`=DISPIMG(...)`) and standard Excel floating images anchored to their cells; and sanitized `.html` / `.htm`. (`.pptx` is recognized for download/external launch rather than inline preview.)
   - **Code, Configs & Special Files**: 45+ programming and config formats, plus dotfiles (`.gitignore`, `.env`, `.env.*`, `.editorconfig`, `.npmrc`, etc.) and extensionless project files (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `CHANGELOG`), with automatic encoding detection (`UTF-8`, `UTF-8 BOM`, `UTF-16 LE/BE`, `GBK`, `Latin1`, up to 32 MB) and a unified format registry (`public/formats.js`) shared between the native file dialog, HTTP server, and renderer.
 
-<p align="center"><img src="assets/multi-format.png" alt="Markdown, DOCX, CSV and code in one window" width="920"></p>
-<p align="center"><img src="assets/pdf-bilingual.png" alt="Layout-preserving bilingual PDF" width="920"></p>
+<p align="center"><img src="assets/multi-format.png" alt="Markdown, DOCX, CSV and code rendered in FolioPrism" width="920"></p>
+<p align="center"><img src="assets/pdf-bilingual.png" alt="Bilingual PDF comparison: original and translated page" width="920"></p>
+
 - **Rich Media, Audio & Video Integration**
   - Resolves relative & remote images in Markdown with lazy loading and a full-screen **Lightbox** (zoom, pan, prev/next).
   - Embeds local audio (`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`) and video (`.mp4`, `.webm`, `.ogv`, `.mov`, `.m4v`, `.mkv`) players with HTTP `206 Partial Content` (`Range`) seeking and playback-progress resume.
@@ -45,15 +46,17 @@
 - **Bilingual Reading & Smart Dictionary**
   - Sentence-level inline translation with a 3-state toggle (**Bilingual / Translation Only / Off**) persisted across files across **19 languages**.
   - **Translation Backends**: Out-of-the-box Bing Web Translate (default) and Google Translate (multi-endpoint failover), plus customizable **OpenAI-compatible APIs** (DeepSeek, GPT, local Ollama, etc.) tuned for academic papers.
-  - **2-Second Hover / Selection Lookup**: Uses `Intl.Segmenter` for accurate word boundaries (including CJK), querying Youdao Dictionary (with US/UK phonetics for EN→ZH) or falling back to your translation engine, with instant pronunciation.
+  - **2-Second Hover / Selection Lookup**: Uses `Intl.Segmenter` for accurate word boundaries (including CJK), querying Youdao Dictionary (with a phonetic transcription for EN→ZH) or falling back to your translation engine, with instant pronunciation.
 
 <p align="center"><img src="assets/original-vs-bilingual.png" alt="Original vs bilingual" width="920"></p>
 <p align="center"><img src="assets/hover-lookup.png" alt="Hover lookup" width="920"></p>
+
 - **Neural Text-to-Speech (TTS)**
   - Paragraph-level and full-article/page-by-page PDF narration via `edge-tts` (with `0.7×–1.3×` speed control and language-aware neural voice selection), automatically falling back to the browser's `Web Speech API` when offline or unconfigured.
   - **Streaming playback**: a persistent Python worker keeps pre-warmed WebSocket connections to the Edge endpoint, and the server streams MP3 frames over HTTP as they arrive. The browser decodes and schedules them with the Web Audio API, so speech starts before the whole clip is synthesized. Long paragraphs are split into a short first chunk (fast start) plus ≤800-character follow-ups, so text over 1,200 characters no longer hits the request limit.
 
 <p align="center"><img src="assets/tts.png" alt="Neural TTS with sentence highlighting" width="920"></p>
+
 - **Thoughtful Reading Experience**
   - **Non-Destructive Find (`Ctrl+F` / `F3`)**: Powered by the CSS Custom Highlight API (`CSS.highlights`), skipping translation blocks so layout, TTS highlights, and scroll state stay untouched.
   - **Continuity**: Proportional scroll position memory (up to 200 files), *Continue Reading* list, Light/Dark themes, adjustable font sizes, and reading-width toggle.
@@ -209,13 +212,14 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
 ### 核心功能
 
 - **多格式文档渲染**
-  - **Markdown（`.md` / `.markdown`）**：支持 GFM 排版（`marked`）、代码语法高亮与一键复制（`highlight.js`）、自动生成右侧大纲目录，以及文档间相对路径跳转。
-  - **PDF（`.pdf`）**：内置阅读器并集成开源项目 [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate)（`pdf2zh`），生成保留原版排版的双语 / 纯译文 PDF，公式、图表、表格留在原位；**原文 / 双语 / 译文**各自独立使用 `<iframe>`，切换视图不会跳回首页，刷新后也能接回后台翻译进度。
+  - **Markdown（`.md` / `.markdown`）**：支持 GFM 排版（`marked`）、代码语法高亮与一键复制（`highlight.js`）、自动生成左侧大纲目录，以及文档间相对路径跳转。
+  - **PDF（`.pdf`）**：内置阅读器并集成开源项目 [PDFMathTranslate](https://github.com/Byaidu/PDFMathTranslate)（`pdf2zh`），生成尽量保留原版排版的双语 / 纯译文 PDF，公式、图表、表格尽量留在原位；**原文 / 双语 / 译文**各自独立使用 `<iframe>`，切换视图不会跳回首页，刷新后也能接回后台翻译进度。
   - **Office 与网页**：支持 `.docx` 解析（`mammoth`）、多工作表 `.xlsx` / `.xls` / `.csv` 表格预览（`SheetJS`，含 WPS 嵌入式单元格图片 `=DISPIMG(...)` 与标准 Excel 浮动锚点图片）以及消毒后的 `.html` / `.htm`。（`.pptx` 识别后提供下载与路径复制卡片，不做内联渲染。）
   - **代码、配置与特殊文件**：通过前后端共享的统一格式注册表（`public/formats.js`）支持 45+ 种编程语言与配置文件、常见点文件（`.gitignore`、`.env`、`.env.*`、`.editorconfig`、`.npmrc` 等）以及无扩展名工程文件（`Makefile`、`Dockerfile`、`LICENSE`、`README`、`CHANGELOG`），单文件上限 32 MB，自动识别 `UTF-8`、`UTF-8 BOM`、`UTF-16 LE/BE`、`GBK`、`Latin1` 编码，彻底对齐原生文件选择框筛选器与渲染器。
 
-<p align="center"><img src="assets/multi-format.png" alt="一个窗口阅读 Markdown、DOCX、CSV 与代码" width="920"></p>
-<p align="center"><img src="assets/pdf-bilingual.png" alt="保留排版的双语 PDF" width="920"></p>
+<p align="center"><img src="assets/multi-format.png" alt="FolioPrism 中阅读 Markdown、DOCX、CSV 与代码" width="920"></p>
+<p align="center"><img src="assets/pdf-bilingual.png" alt="双语 PDF 对照：原文页与译文页" width="920"></p>
+
 - **富媒体、音频与视频嵌入**
   - 自动解析 Markdown 中的相对路径图片、远程图片及本地图片兜底目录，支持懒加载与全屏**图片灯箱**（缩放、拖拽、上下张切换）。
   - 支持本地音频（`.mp3`、`.wav`、`.m4a`、`.flac`、`.ogg`）与视频（`.mp4`、`.webm`、`.ogv`、`.mov`、`.m4v`、`.mkv`）内嵌播放，服务端完整实现 HTTP `206 Partial Content`（`Range`）分片拖拽，并记住本地视频播放进度。
@@ -227,11 +231,13 @@ Released under the [MIT License](LICENSE). You are free to use, modify, distribu
 
 <p align="center"><img src="assets/original-vs-bilingual.png" alt="原文与双语对照" width="920"></p>
 <p align="center"><img src="assets/hover-lookup.png" alt="悬停查词" width="920"></p>
+
 - **神经语音朗读（TTS）**
   - 集成 `edge-tts` 神经语音合成，支持按段落点读、整篇连续朗读及 PDF 按页抽取朗读，支持 `0.7×–1.3×` 语速调节与按语种自动匹配母语音色；未安装语音引擎或离线时自动退回浏览器自带 `Web Speech API` 朗读。
   - **流式朗读**：常驻 Python 工作进程维护预热的 Edge WebSocket 连接，服务端收到 MP3 数据即通过 HTTP 边收边传，浏览器用 Web Audio 逐块解码调度，整段合成完之前就能出声。长段落会拆成「首块较短 + 后续 ≤800 字」多块，超过 1200 字也不会再因长度限制报错。
 
 <p align="center"><img src="assets/tts.png" alt="神经语音朗读与句子高亮" width="920"></p>
+
 - **沉浸式阅读辅助**
   - **无损文档内查找（`Ctrl+F` / `F3`）**：基于 `CSS Custom Highlight API`（`CSS.highlights`）实现，不修改 DOM 结构，不破坏双语排版与朗读高亮，自动跳过译文块。
   - **阅读连续性**：按滚动比例记忆每篇文档的阅读位置（最多 200 篇，并在首屏图片加载沉降后精准恢复）、*继续阅读* 列表、明暗主题切换、字号与阅读宽度调节。
