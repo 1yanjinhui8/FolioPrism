@@ -23,6 +23,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron@44 没有 postinstall，二进制在首次 require 时才下载；
+      # 并行测试会同时解压同一个 zip 而失败，先串行装好。
+      - name: Preinstall Electron binary
+        run: node node_modules/electron/install.js
+
       - name: Copy browser libraries into src/renderer/vendor
         run: npm run setup
 
