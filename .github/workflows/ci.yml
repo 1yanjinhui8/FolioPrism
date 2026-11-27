@@ -36,13 +36,12 @@ jobs:
       - name: End-to-end server verification
         run: npm run verify
 
-  # Ubuntu：只跑纯 Node 的单元测试，顺便提前暴露跨平台路径问题。
-  # 项目本身只面向 Windows（where.exe / taskkill / 盘符路径），部分用例在 Linux
-  # 上会失败；所以这个任务只作提示，不拦截 PR。等跨平台适配真正做起来再收紧。
+  # Ubuntu：只跑纯 Node 的单元测试，用来提前暴露跨平台路径问题。
+  # 应用本身仍只面向 Windows（where.exe / taskkill / 盘符路径），但单元测试
+  # 已经做到两边都通过，所以这里也作为必需检查。
   linux:
-    name: Linux · unit (advisory)
+    name: Linux · unit
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
