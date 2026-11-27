@@ -27,6 +27,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron@44 没有 postinstall：二进制是在第一次 require('electron') 时才下载。
+      # node --test 会并行跑多个测试文件，多个进程同时解压同一个 zip 会撞
+      # "Cannot create a file when that file already exists (os error 183)"。
+      # 所以先在单个进程里把它装好。
+      - name: Preinstall Electron binary
+        run: node node_modules/electron/install.js
+
       - name: Copy browser libraries into src/renderer/vendor
         run: npm run setup
 
@@ -52,6 +59,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # 同上：并行测试会同时触发 electron 首次下载，先串行装好
+      - name: Preinstall Electron binary
+        run: node node_modules/electron/install.js
 
       - name: Copy browser libraries into src/renderer/vendor
         run: npm run setup
