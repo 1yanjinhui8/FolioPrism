@@ -11,16 +11,19 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const translator = require('./translator');
-const formats = require('./public/formats');
+const translator = require('../translator');
+const formats = require('../shared/formats');
 
 const __dir = __dirname;
-const PUBLIC_DIR = path.join(__dir, 'public');
+/** 仓库根目录（开发时是工作区根，打包后是 app.asar 根） */
+const APP_ROOT = path.join(__dir, '..', '..');
+const PUBLIC_DIR = path.join(__dir, '..', 'renderer');
+const SHARED_DIR = path.join(__dir, '..', 'shared');
 const VENDOR_DIR = path.join(PUBLIC_DIR, 'vendor');
 /** 打包成 asar 后 __dirname 是只读的，日志只能落到系统临时目录 */
 const LOG_FILE = __dir.includes('app.asar')
   ? path.join(os.tmpdir(), 'folioprism.log')
-  : path.join(__dir, 'runtime.log');
+  : path.join(APP_ROOT, 'runtime.log');
 /**
  * 图片兜底目录：新名字优先，旧名字保留兼容——
  * 改名之前用户放在 media-reader-images 里的图片不该突然找不到。
@@ -50,7 +53,7 @@ const ACCESS_COOKIE = 'mr_token';
 
 const CSP =
   "default-src 'self'; " +
-  // 只为本地 public/vendor 里的库放行，不再允许 CDN 脚本
+  // 只为本地 src/renderer/vendor 里的库放行，不再允许 CDN 脚本
   "script-src 'self'; " +
   // 进度条宽度、取词浮层定位、字号变量都用 element.style 动态设置，
   // 去掉 unsafe-inline 会让这些交互全部失效；文档侧的 style 属性已在
@@ -109,7 +112,7 @@ let DEFAULT_FILE = pickDefaultFile(ROOT);
 
 let VERSION = '1.0.0';
 try {
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dir, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
   if (pkg && pkg.version) VERSION = pkg.version;
 } catch (_) {}
 
@@ -167,7 +170,7 @@ function contentTypeFor(p) {
 }
 
 /**
- * /api/raw 的可信类型边界（统一来自 public/formats.js）。
+ * /api/raw 的可信类型边界（统一来自 src/shared/formats.js）。
  *
  * 这些类型可以内联返回：PDF 需要给 iframe 用，图片/音视频要直接渲染，
  * Office 文件由前端 fetch 后解析。其余类型（HTML/SVG/JS/CSS/JSON/纯文本）
@@ -195,7 +198,7 @@ function applyRawPolicy(res, filePath) {
 }
 
 /* ------------------------------------------------------------------ */
-/* kind 判定（统一来自 public/formats.js）                              */
+/* kind 判定（统一来自 src/shared/formats.js）                         */
 /* ------------------------------------------------------------------ */
 
 const CODE_EXT = new Set(formats.CODE_EXT);
@@ -696,7 +699,7 @@ async function handleRequest(req, res) {
     res.setHeader('Content-Security-Policy', CSP);
     const indexFile = path.join(PUBLIC_DIR, 'index.html');
     if (!fs.existsSync(indexFile)) {
-      return sendJson(res, 404, { error: 'public/index.html not found' });
+      return sendJson(res, 404, { error: 'src/renderer/index.html not found' });
     }
     res.setHeader('Cache-Control', 'no-cache');
     return sendFile(req, res, indexFile);
@@ -708,6 +711,15 @@ async function handleRequest(req, res) {
     const target = safeJoin(PUBLIC_DIR, rel);
     if (!target) return sendJson(res, 403, { error: 'forbidden' });
     // 这三个文件是本地开发时改得最勤的，禁用缓存免得改了看不到
+    res.setHeader('Cache-Control', 'no-cache');
+    return sendFile(req, res, target);
+  }
+
+  /* --- 静态：/shared/<path>（前后端共用模块，目前只有 formats.js） --- */
+  if (pathname.startsWith('/shared/')) {
+    const rel = pathname.slice('/shared/'.length);
+    const target = safeJoin(SHARED_DIR, rel);
+    if (!target) return sendJson(res, 403, { error: 'forbidden' });
     res.setHeader('Cache-Control', 'no-cache');
     return sendFile(req, res, target);
   }

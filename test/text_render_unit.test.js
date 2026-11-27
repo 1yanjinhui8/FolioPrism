@@ -62,8 +62,8 @@ function decodeBasicEntities(s) {
 
 function createDomHarness(opts) {
   const o = opts || {};
-  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'formats.js'), 'utf8');
-  const code = fs.readFileSync(path.join(ROOT_DIR, 'public', 'app.js'), 'utf8');
+  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'shared', 'formats.js'), 'utf8');
+  const code = fs.readFileSync(path.join(ROOT_DIR, 'src', 'renderer', 'app.js'), 'utf8');
   const hljsCalls = [];
 
   class MockElement {
@@ -484,17 +484,17 @@ function createDomHarness(opts) {
     sandbox.DOMPurify = { sanitize: (html) => html };
   }
   if (o.withXlsx) {
-    const xlsxCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'vendor', 'xlsx.full.min.js'), 'utf8');
+    const xlsxCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'renderer', 'vendor', 'xlsx.full.min.js'), 'utf8');
     sandbox.self = sandbox;
-    vm.runInNewContext(xlsxCode, sandbox, { filename: 'public/vendor/xlsx.full.min.js' });
+    vm.runInNewContext(xlsxCode, sandbox, { filename: 'src/renderer/vendor/xlsx.full.min.js' });
   }
 
   sandbox.window = sandbox;
   sandbox.window.addEventListener = () => {};
   sandbox.window.scrollTo = () => {};
 
-  vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
-  vm.runInNewContext(code, sandbox, { filename: 'public/app.js' });
+  vm.runInNewContext(formatsCode, sandbox, { filename: 'src/shared/formats.js' });
+  vm.runInNewContext(code, sandbox, { filename: 'src/renderer/app.js' });
   return {
     sandbox,
     content: fixedIds.content,
@@ -896,7 +896,7 @@ test('server /api/read decodes UTF-8, UTF-8 BOM, UTF-16 LE/BE, and GBK cleanly',
     [
       `'use strict';`,
       `process.argv.push('--port=${port}', '--token=${token}', '--no-open');`,
-      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'server.js'))});`,
+      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'server', 'index.js'))});`,
       `server.start({ port: ${port}, root: ${JSON.stringify(tmpRoot)}, openBrowser: false }).then((p) => {`,
       `  process.stdout.write(JSON.stringify({ ready: true, port: p }) + '\\n');`,
       `});`,

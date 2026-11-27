@@ -1,0 +1,48 @@
+name: Release Gate
+
+# 打 tag（v1.2.3 / 1.2.3）时自动打包并跑发布门禁。
+# 门禁不通过就不会产出可发布产物；安装包仍需在本地用 Inno Setup 编译
+# （installer/FolioPrism.iss），因为它依赖 Windows 上的 ISCC.exe。
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Build & verify release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron@44 没有 postinstall，二进制在首次 require 时才下载；
+      # 并行测试会同时解压同一个 zip 而失败，先串行装好。
+      - name: Preinstall Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Copy browser libraries into src/renderer/vendor
+        run: npm run setup
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package portable build
+        run: npm run dist
+
+      - name: Release gate
+        run: npm run verify:dist
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolioPrism-win32-x64
+          path: dist/FolioPrism-win32-x64/
+          retention-days: 14

@@ -8,8 +8,8 @@ const cp = require('node:child_process');
 const vm = require('node:vm');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const translator = require('../translator');
-const { readSystemTextScale } = require('../main');
+const translator = require('../src/translator');
+const { readSystemTextScale } = require('../src/main');
 
 function parseAttrMap(raw) {
   const attrs = {};
@@ -32,8 +32,8 @@ function decodeBasicEntities(s) {
 
 function createPdfDomHarness(opts) {
   const o = opts || {};
-  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'formats.js'), 'utf8');
-  const appCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'app.js'), 'utf8');
+  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'shared', 'formats.js'), 'utf8');
+  const appCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'renderer', 'app.js'), 'utf8');
 
   const cssVars = {};
   const postCalls = [];
@@ -390,8 +390,8 @@ function createPdfDomHarness(opts) {
   sandbox.window.scrollTo = () => {};
   sandbox.DOMPurify = { sanitize: (html) => html };
 
-  vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
-  vm.runInNewContext(appCode, sandbox, { filename: 'public/app.js' });
+  vm.runInNewContext(formatsCode, sandbox, { filename: 'src/shared/formats.js' });
+  vm.runInNewContext(appCode, sandbox, { filename: 'src/renderer/app.js' });
 
   return { sandbox, body, content: fixedIds.content, cssVars, postCalls, getCalls };
 }

@@ -6,22 +6,23 @@
  * 检查内容：
  *   1. package.json 与 installer/FolioPrism.iss 版本号一致
  *   2. dist/FolioPrism-win32-x64/resources/app.asar 存在且版本号与源码一致
- *   3. app.asar 内核心源码（public/app.js 等）SHA256 与工作区源码完全一致
- *   4. app.asar 内 public/app.js 不包含旧版崩溃代码 `pre.parentNode.insertBefore(wrap, pre);`
+ *   3. app.asar 内核心源码（src/ 下全部运行时代码）SHA256 与工作区源码完全一致
+ *   4. app.asar 内 src/renderer/app.js 不包含旧版崩溃代码 `pre.parentNode.insertBefore(wrap, pre);`
  *   5. dist/release/ 安装包、便携包、SHA256SUMS.txt、RELEASE_NOTES_<ver>.md 一致性校验
  *
  * 用法：
- *   node verify-release.js
- *   node verify-release.js --require-release
+ *   node scripts/verify-release.js
+ *   node scripts/verify-release.js --require-release
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const asar = require('@electron/asar');
-const formats = require('./public/formats');
+const formats = require('../src/shared/formats');
 
-const ROOT = __dirname;
+/** 脚本住在 scripts/，仓库根在上一级 */
+const ROOT = path.join(__dirname, '..');
 const REQUIRE_RELEASE = process.argv.includes('--require-release');
 
 const checks = [];
@@ -31,6 +32,44 @@ function record(name, pass, detail) {
 
 function sha256Buffer(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+/**
+ * asar 4.x 用平台路径语义查找条目（Windows 下要反斜杠），
+ * 源码侧统一用 / 书写，这里转换一次。
+ */
+function asarPathFor(rel) {
+  return rel.split('/').join(path.sep);
+}
+
+function readAsarFile(asarPath, rel) {
+  return asar.extractFile(asarPath, asarPathFor(rel));
+}
+
+/**
+ * 需要逐个比对哈希的源码文件：src/ 下所有运行时代码。
+ *
+ * 以前这里写死 8 个路径，拆文件后必须手动同步，漏改一处就会「静默 PASS」。
+ * 改成遍历 src/ 后，拆模块不用再改这个脚本。
+ */
+function listSourceFiles() {
+  const out = [];
+  const walk = (absDir, relDir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name === 'vendor') continue; // 由 npm run setup 生成，不在 git 里
+      const rel = relDir ? relDir + '/' + e.name : e.name;
+      if (e.isDirectory()) walk(path.join(absDir, e.name), rel);
+      else if (e.isFile()) out.push('src/' + rel);
+    }
+  };
+  walk(path.join(ROOT, 'src'), '');
+  return out.sort();
 }
 
 function sha256File(filePath) {
@@ -65,29 +104,20 @@ async function main() {
   record('2. dist app.asar 存在', asarExists, asarPath);
 
   if (asarExists) {
-    const asarPkg = JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8'));
+    const asarPkg = JSON.parse(readAsarFile(asarPath, 'package.json').toString('utf8'));
     record(
       '3. app.asar 内版本号与源码一致',
       asarPkg.version === ver,
       `asar=${asarPkg.version}, expected=${ver}`
     );
 
-    const filesToCompare = [
-      'main.js',
-      'preload.js',
-      'server.js',
-      'translator.js',
-      'public/formats.js',
-      'public/app.js',
-      'public/index.html',
-      'public/style.css',
-    ];
+    const filesToCompare = listSourceFiles();
     const mismatched = [];
     for (const rel of filesToCompare) {
       const srcHash = sha256Buffer(fs.readFileSync(path.join(ROOT, rel)));
       let asarHash = '';
       try {
-        asarHash = sha256Buffer(asar.extractFile(asarPath, rel));
+        asarHash = sha256Buffer(readAsarFile(asarPath, rel));
       } catch (e) {
         mismatched.push(`${rel} (asar 提取失败: ${e.message})`);
         continue;
@@ -102,7 +132,7 @@ async function main() {
       mismatched.length === 0 ? `全部 ${filesToCompare.length} 个文件校验一致` : mismatched.join('; ')
     );
 
-    const asarAppJs = asar.extractFile(asarPath, 'public/app.js').toString('utf8');
+    const asarAppJs = readAsarFile(asarPath, 'src/renderer/app.js').toString('utf8');
     const hasLegacyCrash = asarAppJs.includes('pre.parentNode.insertBefore(wrap, pre);');
     record(
       '5. app.asar 不含旧版 wrapPre 崩溃代码',
@@ -110,7 +140,7 @@ async function main() {
       hasLegacyCrash ? '检测到旧版未判空 insertBefore 调用' : '未发现旧版崩溃代码'
     );
 
-    const asarMainJs = asar.extractFile(asarPath, 'main.js').toString('utf8');
+    const asarMainJs = readAsarFile(asarPath, 'src/main/index.js').toString('utf8');
     const firstFilterExts =
       formats.FILE_DIALOG_FILTERS &&
       formats.FILE_DIALOG_FILTERS[0] &&

@@ -4,15 +4,15 @@
   "private": true,
   "license": "MIT",
   "description": "FolioPrism（棱阅）：本地优先的多媒体文档与双语阅读工作台，支持 Markdown / PDF / Office / 代码与音视频",
-  "main": "main.js",
+  "main": "src/main/index.js",
   "scripts": {
-    "setup": "node prepare-vendor.js",
-    "web": "node server.js",
+    "setup": "node scripts/prepare-vendor.js",
+    "web": "node src/server/index.js",
     "start": "electron .",
-    "predist": "node prepare-vendor.js",
-    "dist": "node pack.js",
-    "verify": "node verify.js",
-    "verify:dist": "node verify-release.js",
+    "predist": "node scripts/prepare-vendor.js",
+    "dist": "node scripts/pack.js",
+    "verify": "node scripts/verify.js",
+    "verify:dist": "node scripts/verify-release.js",
     "test": "node --test test/tts_unit.test.js test/text_render_unit.test.js test/formats_unit.test.js test/pdf_fixes_unit.test.js",
     "test:open": "node test/open_file_smoke.js",
     "test:e2e": "node test/e2e_real_tts.js",
@@ -26,6 +26,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electron/asar": "^4.3.1",
     "@electron/packager": "^20.3.0",
     "electron": "^44.6.0"
   }
