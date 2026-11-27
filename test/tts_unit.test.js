@@ -899,7 +899,8 @@ test('translator worker tolerates intentional kill & transient pre-ready failure
   process.env.LOCALAPPDATA = tmpLocal;
 
   const fakeExe = path.join(tmpLocal, 'edge-tts.exe');
-  const fakePy = path.join(tmpLocal, 'python.exe');
+  // findEdgeTtsPython() 在非 Windows 上找的是同目录的 `python`，不是 `python.exe`
+  const fakePy = path.join(tmpLocal, process.platform === 'win32' ? 'python.exe' : 'python');
   fs.writeFileSync(fakeExe, 'stub', 'utf8');
   fs.writeFileSync(fakePy, 'stub', 'utf8');
   fs.mkdirSync(path.join(tmpLocal, 'folioprism'), { recursive: true });

@@ -170,8 +170,12 @@ test('extractFileArg resolves relative, Chinese, spaced paths and skips Electron
     );
 
     // 2. 相对路径结合 workingDirectory 解析
+    //    用 path.join 生成，Windows 上是反斜杠、Linux 上是斜杠，两边都能验证同一行为
     assert.equal(
-      extractFileArg(['FolioPrism.exe', '--user-data-dir=C:\\tmp', '中文 目录\\测试 文档.md'], tmpDir),
+      extractFileArg(
+        ['FolioPrism.exe', '--user-data-dir=' + path.join(os.tmpdir(), 'fp-ud'), path.join('中文 目录', '测试 文档.md')],
+        tmpDir
+      ),
       targetFile
     );
 
