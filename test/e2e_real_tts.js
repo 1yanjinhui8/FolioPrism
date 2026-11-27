@@ -170,8 +170,8 @@ async function run() {
     [
       `'use strict';`,
       `process.argv.push('--port=${PORT}', '--token=${TOKEN}', '--no-open', '--root=${ROOT_DIR.replace(/\\/g, '\\\\')}');`,
-      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'server.js'))});`,
-      `const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'translator.js'))});`,
+      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'server', 'index.js'))});`,
+      `const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'translator', 'index.js'))});`,
       `server.start({ port: ${PORT}, root: ${JSON.stringify(ROOT_DIR)}, openBrowser: false }).then(async () => {`,
       `  await translator.warmTtsWorker();`,
       `  console.log('E2E_SERVER_READY');`,

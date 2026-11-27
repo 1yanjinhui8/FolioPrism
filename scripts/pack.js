@@ -12,35 +12,39 @@
 const path = require('node:path');
 const { packager } = require('@electron/packager');
 
-const ROOT = __dirname;
+const ROOT = path.join(__dirname, '..');
 const APP_NAME = 'FolioPrism';
 
-// 运行时用不到的：打包工具产物、开发脚本、Web 模式启动器、依赖源码
-// （public/vendor 里的浏览器版库是 prepare-vendor 早就拷好的，运行时不需要 node_modules）
-const IGNORE = [
-  /^\/dist(\/|$)/,
-  /^\/node_modules(\/|$)/,
-  /^\/runtime\.log$/,
-  /^\/\.trae(\/|$)/,
-  /^\/verify\.js$/,
-  /^\/verify-release\.js$/,
-  /^\/prepare-vendor\.js$/,
-  /^\/start\.bat$/,
-  /^\/pack\.js$/,
-  // 开发期资产：测试脚本、安装包脚本，运行时都不需要
-  /^\/test(\/|$)/,
-  /^\/installer(\/|$)/,
-  // 本机用户数据备份（阅读进度、缓存、配置），绝不能打进分发包
-  /^\/data-backup(\/|$)/,
-  // README / 商店页用的演示截图与 GIF，运行时不需要
-  /^\/assets(\/|$)/,
-];
+/**
+ * 白名单：只放行运行时真正需要的东西。
+ *
+ * 以前这里是 IGNORE 黑名单（默认放行），新加一个调试脚本 / .env 就会被悄悄
+ * 打进安装包。改成白名单后，新文件默认进不来；万一漏了 src/ 里的运行时代码，
+ * 打包版一启动就会立刻报错，而不是发布之后才发现。
+ *
+ * @param {string} relPath 相对仓库根的路径（Windows 下已统一为 / 分隔）
+ * @returns {boolean} true 表示忽略（不打包）
+ */
+function shouldIgnore(relPath) {
+  if (!relPath || relPath === '/') return false;
+  // 根目录只保留这些文件；其余（.github、docs、scripts、test、installer、assets、
+  // README、start.bat……）一律不进包
+  const ROOT_ALLOW = ['/package.json', '/src', '/build'];
+  const first = '/' + relPath.split('/').filter(Boolean)[0];
+  if (!ROOT_ALLOW.includes(first)) return true;
+
+  // src/ 下只排除开发期目录：测试与文档不在 src 内，这里留一个保险
+  if (first === '/src') {
+    return /^\/src\/(test|docs)(\/|$)/.test(relPath);
+  }
+  return false;
+}
 
 packager({
   dir: ROOT,
   out: path.join(ROOT, 'dist'),
   name: APP_NAME,
-  appVersion: require('./package.json').version,
+  appVersion: require(path.join(ROOT, 'package.json')).version,
   platform: 'win32',
   arch: 'x64',
   icon: path.join(ROOT, 'build', 'icon.ico'),
@@ -49,7 +53,7 @@ packager({
   overwrite: true,
   asar: true,
   prune: false,
-  ignore: IGNORE,
+  ignore: shouldIgnore,
   win32metadata: {
     CompanyName: 'FolioPrism',
     FileDescription: 'FolioPrism 棱阅 · 本地多媒体文档与双语阅读工作台',

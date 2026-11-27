@@ -4,7 +4,7 @@
 ; 编译（在仓库根目录执行）：
 ;   "D:\Claude\Inno Setup 6\ISCC.exe" installer\FolioPrism.iss
 ;
-; 编译前必须先由 pack.js 生成 ..\dist\FolioPrism-win32-x64\
+; 编译前必须先由 scripts/pack.js 生成 ..\dist\FolioPrism-win32-x64\
 ;   ELECTRON_ZIP_DIR="D:/Claude/electron-cache" npm run dist
 ;
 ; 本脚本只负责“安装/卸载/快捷方式”，不参与应用打包；

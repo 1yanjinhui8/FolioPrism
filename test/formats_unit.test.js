@@ -10,8 +10,8 @@ const http = require('node:http');
 const vm = require('node:vm');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const formats = require('../public/formats');
-const { extractFileArg } = require('../main');
+const formats = require('../src/shared/formats');
+const { extractFileArg } = require('../src/main');
 
 function makeTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -165,7 +165,7 @@ test('extractFileArg resolves relative, Chinese, spaced paths and skips Electron
       ''
     );
     assert.equal(
-      extractFileArg(['electron.exe', path.join(ROOT_DIR, 'main.js')], ROOT_DIR),
+      extractFileArg(['electron.exe', path.join(ROOT_DIR, 'src', 'main', 'index.js')], ROOT_DIR),
       ''
     );
 
@@ -233,7 +233,7 @@ test('server /api/browse supports hidden/deps toggles, counts, unreadable entrie
     [
       `'use strict';`,
       `process.argv.push('--port=${port}', '--token=${token}', '--no-open');`,
-      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'server.js'))});`,
+      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'server', 'index.js'))});`,
       `server.start({ port: ${port}, root: ${JSON.stringify(browseDir)}, openBrowser: false }).then((p) => {`,
       `  process.stdout.write(JSON.stringify({ ready: true, port: p }) + '\\n');`,
       `});`,

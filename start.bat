@@ -2,5 +2,5 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 if not exist node_modules ( echo 首次运行，正在安装依赖... & call npm install )
-call node prepare-vendor.js
-node server.js
+call node scripts\prepare-vendor.js
+node src\server\index.js

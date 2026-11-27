@@ -20,7 +20,7 @@
 
   const formats = window.FolioFormats;
   if (!formats) {
-    throw new Error('FolioFormats 未加载：请确认 public/formats.js 已在 public/app.js 之前引入');
+    throw new Error('FolioFormats 未加载：请确认 /shared/formats.js 已在 app.js 之前引入');
   }
 
   function extOf(p) {

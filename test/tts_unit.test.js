@@ -79,9 +79,9 @@ test('tool discovery caches results and avoids eager where.exe when direct path 
   };
 
   // 清除 require 缓存确保加载最新并命中 patched execFileSync
-  const translatorPath = require.resolve('../translator');
+  const translatorPath = require.resolve('../src/translator');
   delete require.cache[translatorPath];
-  const translator = require('../translator');
+  const translator = require('../src/translator');
 
   try {
     translator.invalidateToolCache();
@@ -121,7 +121,7 @@ test('tool discovery caches results and avoids eager where.exe when direct path 
 });
 
 test('detectLanguage with localOnly resolves script and Latin languages without blocking', async () => {
-  const translator = require('../translator');
+  const translator = require('../src/translator');
   const t0 = Date.now();
   const zh = await translator.detectLanguage('这是一个中文测试段落，用于验证本地语言识别。', { localOnly: true });
   const ja = await translator.detectLanguage('これは日本語のテストです。', { localOnly: true });
@@ -207,8 +207,8 @@ test('server /api/tts streams progressively from persistent worker, caches atomi
   const port = 7895;
   const token = 'test-tts-token-1234';
   const childCode = `
-    const server = require(${JSON.stringify(path.join(ROOT_DIR, 'server.js'))});
-    const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'translator.js'))});
+    const server = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'server', 'index.js'))});
+    const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'translator', 'index.js'))});
     server.start({ port: ${port}, root: ${JSON.stringify(ROOT_DIR)}, openBrowser: false }).then(async (p) => {
       await translator.warmTtsWorker();
       process.stdout.write(JSON.stringify({ ready: true, port: p, token: server.getToken() }) + '\\n');
@@ -383,9 +383,9 @@ test('translator.killAllChildren terminates persistent TTS worker cleanly', asyn
     t.skip('uv edge-tts python.exe not installed on host');
     return;
   }
-  const translatorPath = require.resolve('../translator');
+  const translatorPath = require.resolve('../src/translator');
   delete require.cache[translatorPath];
-  const translator = require('../translator');
+  const translator = require('../src/translator');
 
   const w = await translator.warmTtsWorker();
   assert.ok(w && w.proc && w.proc.pid, 'warmTtsWorker should spawn persistent worker');
@@ -405,12 +405,12 @@ test('translator.killAllChildren terminates persistent TTS worker cleanly', asyn
 });
 
 /* ------------------------------------------------------------------ */
-/* 3. public/app.js: 分块、暂停防误回退、快速切段、去重 status 请求        */
+/* 3. src/renderer/app.js: 分块、暂停防误回退、快速切段、去重 status 请求  */
 /* ------------------------------------------------------------------ */
 
 function loadFrontendHarness() {
-  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'public', 'formats.js'), 'utf8');
-  const code = fs.readFileSync(path.join(ROOT_DIR, 'public', 'app.js'), 'utf8');
+  const formatsCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'shared', 'formats.js'), 'utf8');
+  const code = fs.readFileSync(path.join(ROOT_DIR, 'src', 'renderer', 'app.js'), 'utf8');
   const fetchCalls = [];
   const audioInstances = [];
   const speechCalls = [];
@@ -563,8 +563,8 @@ function loadFrontendHarness() {
   sandbox.window.scrollTo = () => {};
   sandbox.setPlayBehavior = (b) => { audioPlayBehavior = b; };
 
-  vm.runInNewContext(formatsCode, sandbox, { filename: 'public/formats.js' });
-  vm.runInNewContext(code, sandbox, { filename: 'public/app.js' });
+  vm.runInNewContext(formatsCode, sandbox, { filename: 'src/shared/formats.js' });
+  vm.runInNewContext(code, sandbox, { filename: 'src/renderer/app.js' });
   return { sandbox, fetchCalls, audioInstances, speechCalls, getEl };
 }
 
@@ -949,9 +949,9 @@ test('translator worker tolerates intentional kill & transient pre-ready failure
     return proc;
   };
 
-  const translatorPath = require.resolve('../translator');
+  const translatorPath = require.resolve('../src/translator');
   delete require.cache[translatorPath];
-  const translator = require('../translator');
+  const translator = require('../src/translator');
 
   try {
     // 1. Intentional killAllChildren() before ready must NOT blacklist python.exe
@@ -1049,8 +1049,8 @@ test('server shutdown closes HTTP socket and HEAD /api/tts synchronous replay un
     [
       `'use strict';`,
       `process.argv.push('--port=${port}', '--token=${token}', '--no-open');`,
-      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'server.js'))});`,
-      `const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'translator.js'))});`,
+      `const server = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'server', 'index.js'))});`,
+      `const translator = require(${JSON.stringify(path.join(ROOT_DIR, 'src', 'translator', 'index.js'))});`,
       `server.start({ port: ${port}, root: ${JSON.stringify(ROOT_DIR)}, openBrowser: false }).then(async () => {`,
       `  await translator.warmTtsWorker();`,
       `  process.stdout.write('READY\\n');`,
@@ -1330,9 +1330,9 @@ test('TTS_WORKER_SCRIPT closes all non-winning WS on dual-completion/cancel, par
     setImmediate(() => p.stdout.write(JSON.stringify({ type: 'ready' }) + '\n'));
     return p;
   };
-  const translatorPath = require.resolve('../translator');
+  const translatorPath = require.resolve('../src/translator');
   delete require.cache[translatorPath];
-  const translator = require('../translator');
+  const translator = require('../src/translator');
   try {
     await translator.warmTtsWorker();
   } finally {

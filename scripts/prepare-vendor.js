@@ -1,14 +1,16 @@
 'use strict';
 
 /**
- * 把浏览器版库文件从 node_modules 拷到 public/vendor/
+ * 把浏览器版库文件从 node_modules 拷到 src/renderer/vendor/
+ *
+ * 脚本住在 scripts/，所以仓库根目录要往上找一级。
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 
-const __dir = __dirname;
-const VENDOR_DIR = path.join(__dir, 'public', 'vendor');
+const __dir = path.join(__dirname, '..');
+const VENDOR_DIR = path.join(__dir, 'src', 'renderer', 'vendor');
 
 /** 目标文件名 -> 候选源相对路径（按顺序取第一个存在的） */
 const TARGETS = [
@@ -37,7 +39,7 @@ const TARGETS = [
     sources: ['node_modules/xlsx/dist/xlsx.full.min.js'],
   },
   {
-    // Markdown 里的原始 HTML 必须消毒后再进 DOM，见 public/app.js 的 sanitizeHtml()
+    // Markdown 里的原始 HTML 必须消毒后再进 DOM，见 src/renderer/app.js 的 sanitizeHtml()
     dest: 'purify.min.js',
     sources: ['node_modules/dompurify/dist/purify.min.js'],
   },

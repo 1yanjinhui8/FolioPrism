@@ -2,7 +2,7 @@
 
 /**
  * 端到端验收脚本
- * 用法: node verify.js [样本 Markdown 路径]
+ * 用法: node scripts/verify.js [样本 Markdown 路径]
  * 也可以用环境变量 READER_SAMPLE 指定样本；不提供时跳过与样本相关的检查。
  */
 
@@ -13,6 +13,9 @@ const cp = require('node:child_process');
 
 const PORT = 7789;
 const BASE = 'http://127.0.0.1:' + PORT;
+/** 脚本住在 scripts/，仓库根在上一级 */
+const ROOT = path.join(__dirname, '..');
+const SERVER_ENTRY = path.join(ROOT, 'src', 'server', 'index.js');
 // 服务端除 /api/health 外都要求令牌；验收脚本用固定令牌启动，省去抓 Cookie
 const TOKEN = 'verify-token-' + process.pid;
 
@@ -76,8 +79,8 @@ async function main() {
   /* ---------- 1. 启动服务 ---------- */
   const child = cp.spawn(
     process.execPath,
-    ['server.js', '--no-open', '--port=' + PORT, '--token=' + TOKEN],
-    { cwd: __dirname, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+    [SERVER_ENTRY, '--no-open', '--port=' + PORT, '--token=' + TOKEN],
+    { cwd: ROOT, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
   );
 
   let serverStdout = '';
@@ -185,6 +188,7 @@ async function main() {
     /* ---------- 5. 静态资源 ---------- */
     const staticChecks = [
       ['/', 'GET /'],
+      ['/shared/formats.js', 'GET /shared/formats.js'],
       ['/vendor/marked.min.js', 'GET /vendor/marked.min.js'],
       ['/vendor/highlight.min.js', 'GET /vendor/highlight.min.js'],
     ];

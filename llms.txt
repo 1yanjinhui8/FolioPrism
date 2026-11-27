@@ -17,53 +17,55 @@
 
 ## 技术栈
 
-- Electron 44 主进程（`main.js`）：窗口、菜单、原生对话框、文件关联、单实例。
-- `server.js`：零第三方依赖的 Node.js `http` 服务，默认 `127.0.0.1:7788`，带令牌鉴权、路径边界、Range 流媒体。
-- `public/`：没有构建步骤的纯前端（原生 ES 模块 + `<script>`），库由 `npm run setup` 从 node_modules 拷到 `public/vendor/`。
-- `translator.js`：文本/PDF 翻译、悬停查词、pdf2zh 调用、edge-tts 流式合成、缓存清理、uv 一键安装。
+- Electron 44 主进程（`src/main/index.js`）：窗口、菜单、原生对话框、文件关联、单实例。
+- `src/server/index.js`：零第三方依赖的 Node.js `http` 服务，默认 `127.0.0.1:7788`，带令牌鉴权、路径边界、Range 流媒体。
+- `src/renderer/`：没有构建步骤的纯前端（原生 ES 模块 + `<script>`），库由 `npm run setup` 从 node_modules 拷到 `src/renderer/vendor/`。
+- `src/translator/index.js`：文本/PDF 翻译、悬停查词、pdf2zh 调用、edge-tts 流式合成、缓存清理、uv 一键安装。
 - 可选外部工具（在应用内通过 uv 一键安装）：`pdf2zh`、`edge-tts`。
 
 ## 核心文件
 
 - [README.md](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/README.md)：完整功能说明（中英双语）
 - [package.json](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/package.json)：依赖与全部 npm 脚本
-- [main.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/main.js)：Electron 主进程
-- [preload.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/preload.js)：最小 IPC 面
-- [server.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/server.js)：本地 HTTP 服务（目录浏览、编码识别、Range、鉴权）
-- [translator.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/translator.js)：翻译 / 查词 / TTS / 引擎安装
-- [public/index.html](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/index.html)：前端骨架
-- [public/formats.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/formats.js)：前后端共享的统一格式注册表（UMD）
-- [public/app.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/app.js)：多格式渲染、双语引擎、朗读、查找、灯箱
-- [public/style.css](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/public/style.css)：明暗主题与排版
-- [pack.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/pack.js)：@electron/packager 打包脚本（win32-x64 绿色版）
+- [src/main/index.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/main/index.js)：Electron 主进程
+- [src/preload/index.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/preload/index.js)：最小 IPC 面
+- [src/server/index.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/server/index.js)：本地 HTTP 服务（目录浏览、编码识别、Range、鉴权）
+- [src/translator/index.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/translator/index.js)：翻译 / 查词 / TTS / 引擎安装
+- [src/renderer/index.html](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/renderer/index.html)：前端骨架
+- [src/shared/formats.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/shared/formats.js)：前后端共享的统一格式注册表（UMD）
+- [src/renderer/app.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/renderer/app.js)：多格式渲染、双语引擎、朗读、查找、灯箱
+- [src/renderer/style.css](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/src/renderer/style.css)：明暗主题与排版
+- [scripts/pack.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/scripts/pack.js)：@electron/packager 打包脚本（win32-x64 绿色版）
 - [installer/FolioPrism.iss](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/installer/FolioPrism.iss)：Inno Setup 6 安装包脚本
-- [verify.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/verify.js)：端到端验收脚本
+- [scripts/verify.js](https://raw.githubusercontent.com/1yanjinhui8/FolioPrism/main/scripts/verify.js)：端到端验收脚本
 
 ## 目录结构
 
 ```text
-main.js             Electron 主进程：窗口、菜单、原生对话框、文件关联
-preload.js          contextBridge 暴露的最小 IPC 接口
-server.js           零依赖本地 HTTP 服务：目录浏览、编码识别、Range、鉴权
-translator.js       翻译 / 查词 / pdf2zh / edge-tts / 缓存清理 / uv 安装
-public/
-  index.html        前端骨架与翻译、朗读、查找面板
-  formats.js        前后端共享的统一格式注册表（UMD）
-  app.js            多格式渲染、双语引擎、TTS、灯箱、阅读辅助
-  style.css         明暗主题与排版
-  vendor/           由 npm run setup 生成，不入库
-pack.js             打包脚本（win32-x64 绿色版）
+src/
+  main/index.js     Electron 主进程：窗口、菜单、原生对话框、文件关联
+  preload/index.js  contextBridge 暴露的最小 IPC 接口
+  server/index.js   零依赖本地 HTTP 服务：目录浏览、编码识别、Range、鉴权
+  translator/index.js  翻译 / 查词 / pdf2zh / edge-tts / 缓存清理 / uv 安装
+  shared/formats.js 前后端共享的统一格式注册表（UMD）
+  renderer/
+    index.html      前端骨架与翻译、朗读、查找面板
+    app.js          多格式渲染、双语引擎、TTS、灯箱、阅读辅助
+    style.css       明暗主题与排版
+    vendor/         由 npm run setup 生成，不入库
+scripts/
+  pack.js           打包脚本（win32-x64 绿色版）
+  verify.js         端到端验收脚本
+  verify-release.js 发布产物门禁校验
 installer/          Inno Setup 6 安装包脚本
 test/               单元测试、真实浏览器 E2E、打包产物冒烟测试
-verify.js           端到端验收脚本
-verify-release.js   对打包产物的发布前校验
 ```
 
 ## 运行与测试
 
 ```bash
 npm install        # 安装依赖
-npm run setup      # 把前端库复制到 public/vendor（不可跳过）
+npm run setup      # 把前端库复制到 src/renderer/vendor（不可跳过）
 npm start          # 启动 Electron 桌面窗口
 npm run web        # 纯浏览器模式
 
@@ -90,7 +92,7 @@ ELECTRON_ZIP_DIR="D:/path/to/electron-cache" npm run dist
 - 1.5.3：PDF 阅读体验与翻译稳定性修复。PDF 视图改为铺满窗口，顶栏新增 A- / A+ 缩放（75%–200%，快捷键沿用「视图 → 增大/减小字号」），并跟随 Windows「文本大小」辅助功能缩放；「重新翻译」会真正强制重跑（`force` + `--ignore-cache`），切换翻译服务/语言后自动刷新 PDF 状态；Bing 翻译长段落自动分块（≤900 字符、保护 `{vN}` 占位符），并在原文与译文语言相同时给出明确提示而不是静默失败；界面字号改用 `--font-size-base × --text-scale` 计算。
 - 1.5.2：修复 Excel 表格内嵌图片无法显示。支持 WPS `=DISPIMG("ID_...",1)` 嵌入式单元格图片（解析 `xl/cellimages.xml` 与关系映射）与标准 Excel 浮动图片（`oneCellAnchor` / `twoCellAnchor` 锚点落到对应单元格），自动隐藏 `WpsReserved_CellImgList` 等 veryHidden 保留表；图片以 `Blob URL` 渲染并接入灯箱放大，切换文件时统一回收，外链与 SVG 等非位图媒体被安全拦截。
 - 1.5.1：界面与导航重构。顶栏移除「打开文件夹 / 打开文件」、路径框、字号/宽度/目录/翻译设置按钮，桌面端统一收口到原生菜单栏（「文件 → 打开文件…」`Ctrl+O`，「视图」内含 A+/A-/阅读宽度/翻译设置）；移除全盘文件夹树、最近文件夹与右侧目录栏，改为两栏布局，左侧边栏保留「继续阅读」与可收起/展开的文档目录；纯浏览器 Web 模式提供顶栏「打开文件」与「视图 ▾」下拉替代原生菜单。
-- 1.5.0：新增统一格式注册表（`public/formats.js`），补齐音频（mp3/wav/m4a/flac/ogg）与 mkv/ogv 视频、点文件（.gitignore/.env）及无扩展名文件（Makefile/Dockerfile/LICENSE/README）支持；侧栏新增隐藏项/依赖目录开关与不可读占位行；顶栏新增「打开文件」按钮并支持 Web 模式本地 File API 预览；安装包支持注册 Windows「打开方式」与默认应用关联。
+- 1.5.0：新增统一格式注册表（`src/shared/formats.js`），补齐音频（mp3/wav/m4a/flac/ogg）与 mkv/ogv 视频、点文件（.gitignore/.env）及无扩展名文件（Makefile/Dockerfile/LICENSE/README）支持；侧栏新增隐藏项/依赖目录开关与不可读占位行；顶栏新增「打开文件」按钮并支持 Web 模式本地 File API 预览；安装包支持注册 Windows「打开方式」与默认应用关联。
 - 1.4.1：修复直接打开文本/代码文件时的渲染崩溃，补齐发布门禁。
 - 1.4.0：朗读改为流式合成与流式播放（常驻 worker + HTTP 分块 + Web Audio 边解边播），新增安装包脚本与三层测试。
 - 1.3.0：首个公开发行版，更名 FolioPrism 棱阅，支持命令行/拖拽/打开方式打开文件，MIT 许可。

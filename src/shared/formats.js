@@ -3,7 +3,7 @@
 /**
  * FolioPrism（棱阅）—— 统一格式注册表（Node 与浏览器共享 UMD）
  *
- * 作为 main.js、server.js、public/app.js 及自动化测试的唯一格式真相源，
+ * 作为 src/main、src/server、src/renderer/app.js 及自动化测试的唯一格式真相源，
  * 消除文件选择框筛选器、服务端白名单与前端渲染分支之间的扩展名漂移。
  */
 (function (root, factory) {

@@ -16,14 +16,16 @@ const electron = require('electron');
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } =
   typeof electron === 'object' && electron ? electron : {};
 
-const server = require('./server');
-const formats = require('./public/formats');
+const server = require('../server');
+const formats = require('../shared/formats');
 
 // 产品名用英文，进程名 / exe 名 / 安装目录都用它；界面上再带中文名「棱阅」
 const APP_NAME = 'FolioPrism';
 const APP_TITLE = 'FolioPrism 棱阅';
 const LEGACY_APP_NAME = '媒体阅读器';
-const ICON_PATH = path.join(__dirname, 'build', 'icon.ico');
+// 仓库根目录（开发时是工作区根，打包后是 app.asar 根）
+const APP_ROOT = path.join(__dirname, '..', '..');
+const ICON_PATH = path.join(APP_ROOT, 'build', 'icon.ico');
 const START_PORT = 7788;
 
 let mainWindow = null;
@@ -45,9 +47,9 @@ let lastDialogDir = '';
 function extractFileArg(argv, cwd) {
   if (!Array.isArray(argv)) return '';
   const baseCwd = cwd && typeof cwd === 'string' ? cwd : process.cwd();
-  const appDir = path.resolve(__dirname).toLowerCase();
-  const mainScript = path.resolve(__dirname, 'main.js').toLowerCase();
-  const pkgJson = path.resolve(__dirname, 'package.json').toLowerCase();
+  const appDir = path.resolve(APP_ROOT).toLowerCase();
+  const mainScript = path.resolve(__dirname, 'index.js').toLowerCase();
+  const pkgJson = path.resolve(APP_ROOT, 'package.json').toLowerCase();
   let afterDoubleDash = false;
 
   for (let i = 1; i < argv.length; i++) {
@@ -294,7 +296,7 @@ function createWindow() {
     backgroundColor: '#f6f7f9',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
