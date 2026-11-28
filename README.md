@@ -83,7 +83,7 @@ npm run setup
 npm start
 ```
 
-> `npm run setup` (`scripts/prepare-vendor.js`) copies browser-side libraries (`marked`, `highlight.js`, `mammoth`, `xlsx`, `DOMPurify`) from `node_modules` into `src/renderer/vendor/` so the app never relies on external CDNs. Run it after initial installation or dependency updates.
+> `npm run setup` (`scripts/prepare-vendor.js`) copies browser-side libraries (`marked`, `highlight.js`, `mammoth`, `xlsx`, `DOMPurify`) from `node_modules` into `src/renderer/vendor/` so the app never relies on external CDNs. `npm install` already runs it via `postinstall`; re-run it after dependency updates, or if you installed with `--ignore-scripts`.
 
 #### Browser-Only Mode
 
@@ -126,7 +126,13 @@ npm run test:packaged   # smoke-test the built dist/ exe (run npm run dist first
 npm run verify:dist     # release gate check: version sync, app.asar SHA256 parity, filter coverage & SHA256SUMS
 ```
 
-Execution order & dependencies: run `npm install` first; its `postinstall` hook automatically runs `npm run setup` (`node scripts/prepare-vendor.js`) to copy browser libraries from `node_modules` into `src/renderer/vendor/` (and `pretest`, `preverify`, and `predist` also run `prepare-vendor.js` automatically before `npm test`, `npm run verify`, and `npm run dist`, or you can invoke `npm run setup` manually). After `npm install`, `npm test` runs offline in pure Node.js without loading Electron—it reads `xlsx` from `src/renderer/vendor/` when present and falls back to `node_modules/xlsx` otherwise. `npm run verify` requires `src/renderer/vendor/` to be prepared (handled automatically by `preverify`). `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
+**Execution order — the vendor step comes first.** `src/renderer/vendor/` is generated, git-ignored, and required by the tests:
+
+1. `npm install` — its `postinstall` hook runs `node scripts/prepare-vendor.js`, copying the 7 browser bundles (`marked`, `highlight.js` ×2, `mammoth`, `xlsx`, `DOMPurify`) from `node_modules` into `src/renderer/vendor/`.
+2. `npm test` and `npm run verify` — `pretest` / `preverify` re-run `prepare-vendor.js` first, so a deleted or stale vendor directory is repaired before either check starts. If you installed with `--ignore-scripts`, run `npm run setup` once manually.
+3. Without `src/renderer/vendor/`, `npm test` still passes (it falls back to `node_modules/xlsx`), but `npm run verify` fails with `404` on `/vendor/marked.min.js` and `/vendor/highlight.min.js` — that is the check that proves the vendor step ran.
+
+`npm test` runs offline in pure Node.js and does not load Electron. `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
 
 ### Verification Script
 
@@ -271,7 +277,7 @@ npm run setup
 npm start
 ```
 
-> `npm run setup`（即 `scripts/prepare-vendor.js`）会把浏览器端依赖（`marked`、`highlight.js`、`mammoth`、`xlsx`、`DOMPurify`）从 `node_modules` 复制到 `src/renderer/vendor/`，确保完全不依赖外部 CDN。首次拉取或升级依赖后均需执行一次。
+> `npm run setup`（即 `scripts/prepare-vendor.js`）会把浏览器端依赖（`marked`、`highlight.js`、`mammoth`、`xlsx`、`DOMPurify`）从 `node_modules` 复制到 `src/renderer/vendor/`，确保完全不依赖外部 CDN。`npm install` 已通过 `postinstall` 自动执行该步骤；升级依赖后请重跑，或在使用 `--ignore-scripts` 安装时手动执行一次。
 
 #### 仅用浏览器打开（Web 模式）
 
@@ -314,7 +320,13 @@ npm run test:packaged   # 对 dist 产物做冒烟测试（先 npm run dist）
 npm run verify:dist     # 发布产物门禁校验（版本同步、app.asar 哈希一致性、筛选器全覆盖与 SHA256SUMS）
 ```
 
-执行顺序与依赖说明：先执行 `npm install` 安装依赖，`postinstall` 钩子会自动执行 `npm run setup`（`node scripts/prepare-vendor.js`），将浏览器端库从 `node_modules` 复制到 `src/renderer/vendor/`（此外 `pretest`、`preverify` 与 `predist` 也会在执行 `npm test`、`npm run verify` 和 `npm run dist` 前自动运行 `prepare-vendor.js`，也可随时手动执行 `npm run setup`）。完成 `npm install` 后即可离线运行 `npm test`：单元测试在纯 Node.js 下执行、不触发 Electron 加载，且 `xlsx` 会优先读取 `src/renderer/vendor/`，缺失时自动回退到 `node_modules/xlsx`。`npm run verify` 会校验 `/vendor/*` 静态资源，依赖已准备好的 `src/renderer/vendor/`（由 `preverify` 自动保证）。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
+**执行顺序——vendor 这一步必须在前。** `src/renderer/vendor/` 是生成产物、已加入 `.gitignore`，且测试依赖它：
+
+1. `npm install` —— 其 `postinstall` 钩子会执行 `node scripts/prepare-vendor.js`，把 7 个浏览器端库（`marked`、`highlight.js` ×2、`mammoth`、`xlsx`、`DOMPurify`）从 `node_modules` 复制到 `src/renderer/vendor/`。
+2. `npm test` 与 `npm run verify` —— `pretest` / `preverify` 会先重跑 `prepare-vendor.js`，因此 vendor 目录被删除或过期时会在检查开始前自动补齐。若你用了 `--ignore-scripts` 安装，请手动执行一次 `npm run setup`。
+3. 缺少 `src/renderer/vendor/` 时，`npm test` 仍能通过（回退到 `node_modules/xlsx`），但 `npm run verify` 会在 `/vendor/marked.min.js` 与 `/vendor/highlight.min.js` 上以 `404` 失败——这条检查正是用来证明 vendor 步骤确实执行过的。
+
+`npm test` 在纯 Node.js 下离线运行，不加载 Electron。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
 
 ### 端到端验收脚本
 
