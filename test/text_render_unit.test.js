@@ -484,9 +484,13 @@ function createDomHarness(opts) {
     sandbox.DOMPurify = { sanitize: (html) => html };
   }
   if (o.withXlsx) {
-    const xlsxCode = fs.readFileSync(path.join(ROOT_DIR, 'src', 'renderer', 'vendor', 'xlsx.full.min.js'), 'utf8');
+    const vendorXlsx = path.join(ROOT_DIR, 'src', 'renderer', 'vendor', 'xlsx.full.min.js');
+    const xlsxPath = fs.existsSync(vendorXlsx)
+      ? vendorXlsx
+      : require.resolve('xlsx/dist/xlsx.full.min.js');
+    const xlsxCode = fs.readFileSync(xlsxPath, 'utf8');
     sandbox.self = sandbox;
-    vm.runInNewContext(xlsxCode, sandbox, { filename: 'src/renderer/vendor/xlsx.full.min.js' });
+    vm.runInNewContext(xlsxCode, sandbox, { filename: xlsxPath });
   }
 
   sandbox.window = sandbox;

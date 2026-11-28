@@ -118,14 +118,15 @@ Outputs a standalone portable folder at `dist/FolioPrism-win32-x64/`. Copy the f
 ### Tests
 
 ```bash
-npm test                # unit tests: TTS streaming/chunking, text/code rendering, unified format registry & browse/read boundaries
+npm test                # unit tests (offline in pure Node.js after npm install): TTS, rendering, formats & browse/read boundaries
+npm run verify          # end-to-end local HTTP server check (/api/health, static & /vendor/* assets, browse/read/asset)
 npm run test:open       # Electron CDP smoke test for opening multi-encoding text, code, dotfiles, extensionless, audio & Web File API
 npm run test:e2e        # real browser + real Edge TTS latency check (needs network & Chrome/Edge)
 npm run test:packaged   # smoke-test the built dist/ exe (run npm run dist first)
 npm run verify:dist     # release gate check: version sync, app.asar SHA256 parity, filter coverage & SHA256SUMS
 ```
 
-`npm test` is self-contained. `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
+Execution order & dependencies: run `npm install` first; its `postinstall` hook automatically runs `npm run setup` (`node scripts/prepare-vendor.js`) to copy browser libraries from `node_modules` into `src/renderer/vendor/` (and `pretest`, `preverify`, and `predist` also run `prepare-vendor.js` automatically before `npm test`, `npm run verify`, and `npm run dist`, or you can invoke `npm run setup` manually). After `npm install`, `npm test` runs offline in pure Node.js without loading Electron—it reads `xlsx` from `src/renderer/vendor/` when present and falls back to `node_modules/xlsx` otherwise. `npm run verify` requires `src/renderer/vendor/` to be prepared (handled automatically by `preverify`). `test:e2e` drives a real Chromium over CDP and asserts that an uncached paragraph starts playing in under 3 seconds. `test:packaged` launches the packaged `FolioPrism.exe` and re-checks streaming, long-paragraph chunking and cache replay inside the shipped asar; it exits 0 with a skip notice when `dist/` is absent.
 
 ### Verification Script
 
@@ -305,14 +306,15 @@ npm run dist
 ### 测试
 
 ```bash
-npm test                # 单元测试：流式合成、分块、文本渲染、统一格式注册表与目录/读取边界
+npm test                # 单元测试（npm install 后纯 Node.js 离线运行）：流式合成、分块、文本渲染、统一格式注册表与目录/读取边界
+npm run verify          # 本地服务端到端验收（/api/health、静态与 /vendor/* 资源、browse/read/asset）
 npm run test:open       # Electron CDP 文件打开冒烟测试（多编码文本、代码、点文件、无扩展名、音频、Web 本地文件）
 npm run test:e2e        # 真实浏览器 + 真实 Edge TTS 延迟实测（需联网与 Chrome/Edge）
 npm run test:packaged   # 对 dist 产物做冒烟测试（先 npm run dist）
 npm run verify:dist     # 发布产物门禁校验（版本同步、app.asar 哈希一致性、筛选器全覆盖与 SHA256SUMS）
 ```
 
-`npm test` 不依赖网络。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
+执行顺序与依赖说明：先执行 `npm install` 安装依赖，`postinstall` 钩子会自动执行 `npm run setup`（`node scripts/prepare-vendor.js`），将浏览器端库从 `node_modules` 复制到 `src/renderer/vendor/`（此外 `pretest`、`preverify` 与 `predist` 也会在执行 `npm test`、`npm run verify` 和 `npm run dist` 前自动运行 `prepare-vendor.js`，也可随时手动执行 `npm run setup`）。完成 `npm install` 后即可离线运行 `npm test`：单元测试在纯 Node.js 下执行、不触发 Electron 加载，且 `xlsx` 会优先读取 `src/renderer/vendor/`，缺失时自动回退到 `node_modules/xlsx`。`npm run verify` 会校验 `/vendor/*` 静态资源，依赖已准备好的 `src/renderer/vendor/`（由 `preverify` 自动保证）。`test:e2e` 通过 CDP 驱动真实 Chromium，断言未缓存段落从点击到出声小于 3 秒。`test:packaged` 直接启动打包后的 `FolioPrism.exe`，在 asar 内部复查流式播放、长段落分块与缓存复播；`dist/` 不存在时打印跳过说明并以 0 退出。
 
 ### 端到端验收脚本
 

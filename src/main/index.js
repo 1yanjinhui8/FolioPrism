@@ -12,7 +12,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const cp = require('node:child_process');
-const electron = require('electron');
+const electron = process.versions.electron ? require('electron') : null;
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } =
   typeof electron === 'object' && electron ? electron : {};
 
